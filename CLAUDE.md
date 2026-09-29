@@ -19,6 +19,8 @@ revolve benchmark --suite development        # both arms, scripted
 revolve serve                                # UI, loopback only
 python scripts/gen_scenarios.py              # regenerate scenario fixtures
 python scripts/make_example_plans.py         # regenerate examples/plans
+revolve build --plan <file> --out x.wasm     # plan -> Wasm program (+ --native)
+python scripts/compare_engines.py <state> <resultsA> <resultsB>   # engine equivalence
 ```
 
 Jetson (`ssh jetson`, key auth): source in `~/revolve/src`, target in
@@ -39,6 +41,10 @@ Pipe files over ssh stdin; PowerShell pipes add CRLF.
 - Planner output is untrusted: runtime-owned fields are rejected; grants come
   only from `policy.rs`; goals carry no permissions.
 - "Complete" is only ever reported from observation (verifier) or truth (evaluator).
+- Compiled plan programs never perform effects: the host stops the program at the
+  first undone step and the executor dispatches it through the normal path. Every
+  program request is validated against the checked plan, and a module may import
+  only `rt.*` and granted `cap.*`. Keep codegen deterministic (tests compare bytes).
 - Inventory `on_hand` = known parts not yet consumed (bins + gripper + trays awaiting record).
 - Label scripted vs live everywhere; never substitute scripted for a selected live planner.
 - No live model calls without an explicit, user-approved budget.

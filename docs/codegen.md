@@ -81,14 +81,21 @@ loads only with the same wasmtime version and configuration.
 
 ## Evidence (2026-09-29)
 
-Windows x86_64, scripted planner, one trial per scenario. Every suite was run on
-both engines and compared trial by trial with `scripts/compare_engines.py`.
+Scripted planner, one trial per scenario. Every suite was run on both engines
+and compared trial by trial with `scripts/compare_engines.py`. A trial counts as
+identical when its verdict, every action (with arguments and result) and the
+final world all match.
 
-| suite | trials identical (verdict, every action with arguments and result, final world) |
-| --- | --- |
-| development | 14 / 14 |
-| held-out | 31 / 31 |
-| demo | 17 / 17 |
+| suite | Windows x86_64 | Jetson Orin Nano (aarch64) |
+| --- | --- | --- |
+| development | 14 / 14 identical | 14 / 14 identical |
+| held-out | 31 / 31 identical | 31 / 31 identical |
+| demo | 17 / 17 identical | 17 / 17 identical |
+| `cargo test` | 60 / 60 | 60 / 60 |
+
+The same checked plan produces byte-identical Wasm on both machines (sha256
+`94bef657…` for `examples/plans/kit-assembly.json`). Only the native code differs
+per CPU.
 
 The regenerated held-out and development results (`results/`) match the earlier
 interpreter results in every verdict field. Only timing and memory differ.
@@ -104,16 +111,17 @@ Unit tests cover:
 - a runaway loop is stopped by fuel;
 - a program that differs from its plan, or ignores a stop, is blocked.
 
-Cost of the compiled engine (same trials):
+Cost of the compiled engine (same trials, held-out suite, Revolve arm):
 
-| | interpreted | compiled |
-| --- | --- | --- |
-| executor peak memory (max, held-out) | 11.7 MiB | 15.4 MiB |
-| median wall time per trial (held-out) | 663 ms | 682 ms |
-| release binary | ~6 MB | 19.7 MB |
+| | Windows interpreted | Windows compiled | Jetson interpreted | Jetson compiled |
+| --- | --- | --- | --- | --- |
+| executor peak memory (max) | 11.7 MiB | 15.4 MiB | 9.3 MiB | 15.4 MiB |
+| median wall time per trial | 663 ms | 682 ms | 864 ms | 918 ms |
 
-The 38-step nominal plan compiles to a 3.7–4.0 KB Wasm module and about 30 KB
-of x86_64 machine code.
+The release binary grew from about 6 MB to 19.7 MB (Windows). A native build on
+the Jetson takes 4 minutes. The 38-step nominal plan compiles to a 3.7–4.0 KB
+Wasm module; its ahead-of-time native code is 30 KB for x86_64 (Windows) and
+264 KB for aarch64 (Linux; file size includes the object-file container).
 
 ## Limits (honest)
 

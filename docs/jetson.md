@@ -57,6 +57,7 @@ Measured by `scripts/jetson-measure.sh` at the final commit
 | all 10 demonstrations run | evaluator PASS for each | demo output |
 | held-out benchmark (31 scenarios × 2 arms) | 62/62 PASS, 57 s total | `results/jetson-held-out-scripted/` |
 | executor peak RSS | 7.3 MB (baseline) – 8.8 MB (Revolve) | `/proc/self/status` VmHWM, per process |
+| compiled engine (plans as native aarch64 code, 2026-09-29) | 60/60 tests; 62/62 scenarios identical to the interpreter; Revolve executor peak 16.2 MB, mean 932 ms per held-out trial (interpreter: 8.8 MB, 864 ms); native release build 4 min | `results/jetson-held-out-scripted/`, `scripts/compare_engines.py` |
 | state on disk | 22 MB for 92 runs | `du` |
 | board input power during the workload | mean 5.1 W, max 6.1 W (idle baseline sample ≈ 4.6 W) | `tegrastats` VDD_IN, 84 × 1 s samples |
 | max junction temperature | 58.7 °C | `tegrastats` tj |

@@ -1,6 +1,10 @@
 # Current state (handoff)
 
-_Last updated: 2026-09-29, first build session (after the UI round with the user)._
+_Last updated: 2026-09-29, first build session (after vision step 1: plans compiled to native code)._
+
+The goal these milestones serve is in `docs/vision.md`: human intent → program →
+compiled code → robot movement, with the human in the loop. VR,
+thoughts-to-action and a wearable Jetson are later stages.
 
 ## Milestones
 
@@ -11,16 +15,20 @@ _Last updated: 2026-09-29, first build session (after the UI round with the user
 | M2 uncertainty & corrections | done — durable receipts, stable keys, reconciliation, real subprocess crash tests, goal revisions, cancel/pause, stale-reply rejection |
 | M3 AI experiment & demo | done for offline — scripted planner, live adapter (untested against the provider), baseline, UI, benchmark; **live-model comparison not performed** |
 | M4 Jetson | executed on the device — native build, full tests, demos, crash recovery, planner loss, measurements, UI via SSH tunnel |
+| Vision step 1: compile to real code | done — checked plans compile to WebAssembly → native code (Cranelift); default engine; 62/62 scenarios identical to the interpreter on Windows and the Jetson (`docs/codegen.md`) |
 | M5, M6 | not started; see `docs/roadmap.md` |
 
 ## Verified commands (this session)
 
 On Windows (debug and release) and on the Jetson (release):
 
-- `cargo test` — 49 tests pass on Windows (24 unit, 25 integration). The
-  Jetson ran the 39 that existed at the review-fix commit; the ten newer tests
-  (plan-format example, .env lookup, empty-call handling, interpretation,
-  preferred trays, different kits, served build) have run on Windows only.
+- `cargo test` — 60 tests pass on Windows and on the Jetson (31 unit, 29
+  integration), with the compiled engine as the default.
+- Engine equivalence — `scripts/compare_engines.py` on the development,
+  held-out and demo suites: 62/62 trials identical (verdict, every action with
+  arguments and result, final world) on Windows and on the Jetson.
+- `revolve build` — the example plan gives byte-identical Wasm on both machines;
+  native `.cwasm` for x86_64 and aarch64.
 - `cargo clippy --all-targets` — no warnings; `cargo fmt` applied.
 - `revolve demo --scenario <each of 17 demo scenarios>` — expected outcome, evaluator PASS (both arms via `tests/evaluator.rs`).
 - `revolve run --scenario nominal --plan examples/plans/kit-assembly.json` — completed, PASS.
@@ -83,9 +91,19 @@ server unit tests.
 - UI status probes briefly take the executor lock; acquisition retries for
   ~0.5 s to tolerate this. A dedicated liveness file would be cleaner.
 
+- Compiled engine: Revolve executor peak memory rose from about 9–12 MB to about
+  16 MB (Cranelift in-process); wall time rose by about 3–8%. Programs are
+  straight-line, so they cannot yet do anything the interpreter cannot (see
+  `docs/codegen.md`, "Limits").
+
 ## Next concrete task
 
-With a call budget: run the live fault scenarios on both arms (crash-after-effect,
-timeout-unknown, unknown-outcome-restored, goal-change, planner-unavailable,
-shortage; ~$2–3 per scenario pair), then the development suite, and report them
-next to the scripted results.
+Vision step 2, **a real language**. The AI writes programs with loops, branches
+and functions. The compiler must check them itself, because translation
+validation against a step list no longer applies (termination, resource bounds,
+permissions on every path). Each program is explained back to the person in
+plain words before it runs. Then compare it with an AI writing Python directly
+against the same capabilities: first-try compile rate, repair rounds, cost and
+correctness under faults. The comparison needs an approved API budget.
+
+Still open from M3 (needs a budget): the live fault scenarios on both arms.

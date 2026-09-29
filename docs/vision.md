@@ -45,17 +45,18 @@ never become an unchecked movement.
 | Understand intent | partial: own words → structured goal, confirmation, questions, mid-run corrections; one domain (kit assembly) |
 | Language for AI authors | partial: Action IR has typed steps and structured errors the AI repairs from; no loops or functions |
 | Compiler front end | built: parse, types, references, permissions, abstract execution |
-| Code generation | **not built**: the executor interprets checked plans |
+| Code generation | **step 1 built**: checked plans compile to WebAssembly → native code (x86_64 and the Jetson's aarch64), identical results to the interpreter on all 62 scenarios; programs are still straight-line (`docs/codegen.md`) |
 | Crash-safe runtime | built: durable log, no repeated effects, recovery, verification from observation |
 | Robot movement | simulated high-level actions only (pick/place); no arm model, no motion |
-| Edge hardware | runs on the Jetson (≤ 9 MB, ~5 W) |
+| Edge hardware | runs on the Jetson, including compiled plans (≤ 16.2 MB per executor, ~5 W measured before compilation was added) |
 
 ## Proposed path
 
-1. **Compile to real code.** Lower checked plans to WebAssembly (native code
-   via a Wasm runtime), where capabilities are the only imports. Run them through
-   the existing runtime, which replays recorded results after a crash. Pass: same
-   benchmark and crash-test results on Windows and the Jetson. No AI spend.
+1. **Compile to real code. Done 2026-09-29.** Checked plans compile to WebAssembly
+   programs, and Cranelift turns them into native code. Capabilities are the only
+   imports, and crash recovery is replay. The pass criterion was met: 62/62
+   scenarios are identical to the interpreter on Windows and on the Jetson.
+   See `docs/codegen.md`.
 2. **A real language.** Add loops, branches and functions, and explain programs
    back in plain words before they run. Compare with an AI writing Python
    directly against the same capabilities (first-try compile rate, repair

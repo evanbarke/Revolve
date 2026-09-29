@@ -1,10 +1,14 @@
 # Roadmap (deferred work)
 
-Current: M0–M3 implemented; M4 executed on the device. See `docs/current-state.md`.
+Current: M0–M3 implemented; M4 executed on the device; vision step 1 (plans
+compiled to native code, `docs/codegen.md`) done. See `docs/current-state.md`.
 The goal these steps serve, and the proposed path beyond them, is in `docs/vision.md`.
 
 ## Next concrete steps
 
+0. **Vision step 2: a real language** (loops, branches, functions checked by
+   the compiler itself; programs explained back in plain words; compared with
+   an AI writing Python directly). See `docs/vision.md`.
 1. **Live-model H1 comparison** — with an approved call budget: development
    suite × both arms × 3 trials, then held-out. Record usage, latency, failures
    by category. Decide from the data whether the compiler/recovery layer changes

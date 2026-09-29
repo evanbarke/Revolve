@@ -66,6 +66,7 @@ revolve demo --scenario <name> [--arm revolve|baseline] [--planner scripted|conf
 revolve new --scenario <name> [--plan file] [--scripted-human]      # create only; prints run id
 revolve run --scenario nominal --plan examples/plans/kit-assembly.json
 revolve validate --plan examples/plans/invalid-cycle.json [--scenario nominal]
+revolve build --plan examples/plans/kit-assembly.json --out kit.wasm [--native kit.cwasm]  # plan -> program -> machine code
 revolve resume --run <id>            # the executor; also recovers after a crash
 revolve status [--run <id>] [--json]
 revolve evaluate --run <id> [--json]  # score a run against simulator truth
@@ -76,6 +77,11 @@ revolve sim --run <id> restore-evidence | planner-offline | planner-online | una
 revolve serve [--bind 127.0.0.1:8080]
 revolve benchmark --suite development|held-out [--planner scripted|configured --budget N] [--trials N]
 ```
+
+Revolve runs plans as compiled programs by default: each checked plan becomes a
+WebAssembly program that runs as native code. `--engine interpreted` (on `demo`,
+`new`, `run` and `benchmark`) selects the original step walker for comparison.
+See `docs/codegen.md`.
 
 Global: `--state-dir` (default `./state`, env `REVOLVE_STATE_DIR`),
 `--scenarios-dir` (default `./scenarios`). Exit codes: 0 ok, 1 error or invalid
@@ -105,6 +111,7 @@ cargo clippy --all-targets && cargo fmt --check
 ## Documentation
 
 - `docs/vision.md` — the goal: human intent → compiled code → robot movement, and the proposed path
+- `docs/codegen.md` — plans compiled to WebAssembly / native code: ABI, replay, validation, evidence
 - `docs/architecture.md` — runtime boundary and what the compiler does
 - `docs/action-ir.md` — Action IR v1 and capability contracts
 - `docs/recovery.md` — transactions, state machine, unknown outcomes, corrections

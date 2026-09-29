@@ -84,12 +84,16 @@ Output: `raw.jsonl` (one verdict per trial), `results.csv`, `summary.json`,
 
 | suite · host | arm | success | false claims | wrong inventory | dup. effects | refused repeats | unauthorized executed | faulted trials recovered | planner requests | mean wall ms/trial | max executor RSS |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| development · Windows x86_64 | Revolve | 14/14 | 0 | 0 | 0 | 0 | 0 | 6/6 | 20 | 406 | 10.4 MB |
-| development · Windows x86_64 | baseline | 14/14 | 0 | 0 | 0 | 0 | 0 | 6/6 | 317 | 499 | 9.3 MB |
-| held-out · Windows x86_64 | Revolve | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 45 | 659 | 11.9 MB |
-| held-out · Windows x86_64 | baseline | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 1163 | 874 | 9.7 MB |
-| held-out · Jetson Orin Nano (aarch64) | Revolve | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 45 | 864 | 8.8 MB |
-| held-out · Jetson Orin Nano (aarch64) | baseline | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 1163 | 796 | 7.3 MB |
+| development · Windows x86_64 | Revolve | 14/14 | 0 | 0 | 0 | 0 | 0 | 6/6 | 20 | 425 | 14.5 MB |
+| development · Windows x86_64 | baseline | 14/14 | 0 | 0 | 0 | 0 | 0 | 6/6 | 317 | 507 | 9.5 MB |
+| held-out · Windows x86_64 | Revolve | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 45 | 680 | 15.9 MB |
+| held-out · Windows x86_64 | baseline | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 1163 | 839 | 10.0 MB |
+| held-out · Jetson Orin Nano (aarch64) | Revolve | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 45 | 932 | 16.2 MB |
+| held-out · Jetson Orin Nano (aarch64) | baseline | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 1163 | 811 | 8.3 MB |
+
+Revolve rows use the compiled engine (plans run as native code; `docs/codegen.md`).
+With the interpreter the verdicts are identical trial by trial; Revolve's executor
+peak was then 10.4 / 11.9 / 8.8 MB and its mean wall time 406 / 659 / 864 ms.
 
 "Refused repeats" counts pick/place requests that repeated an already-applied
 move and were refused by the adapter's own preconditions (no effect, but
