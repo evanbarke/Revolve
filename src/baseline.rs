@@ -245,9 +245,54 @@ impl Baseline {
                     })
                     .collect(),
                 consumed_evidence: inventory::consumed_evidence(store)?,
+                call_format: crate::ir::call_format(),
             };
             store.bump_planner_decisions()?;
             let (decision, info) = self.planner.next_action(&req);
+            // Tools listed to the agent that are served without dispatch: a status lookup
+            // expressed as a call, and an explicit observe (a fresh observation is already
+            // attached to every turn).
+            let decision = match decision {
+                Ok(AgentDecision::Call {
+                    capability,
+                    arguments,
+                    ..
+                }) if capability == "ops.status" => Ok(AgentDecision::Status {
+                    op_key: arguments
+                        .get("op_key")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                }),
+                Ok(AgentDecision::Call { capability, .. }) if capability == "workspace.observe" => {
+                    let note = json!({"note": "a fresh observation is attached to every turn (see `observation`)", "world_revision": req.observation.as_ref().map(|o| o.world_revision)});
+                    let ids = store.materialize(
+                        None,
+                        "agent",
+                        rev,
+                        &[(
+                            "agent-observe".into(),
+                            "workspace.observe".into(),
+                            "1".into(),
+                            json!({}),
+                            json!({}),
+                        )],
+                    )?;
+                    store.set_action_status(ids[0], A_SUCCEEDED, Some(&note), None)?;
+                    store.record_planner_call(
+                        "baseline",
+                        &self.planner.label(),
+                        rev,
+                        "observe",
+                        info.latency_ms,
+                        info.transport_attempts,
+                        info.usage,
+                        info.detail.as_ref(),
+                    )?;
+                    continue;
+                }
+                other => other,
+            };
             let outcome = match &decision {
                 Ok(AgentDecision::Call { .. }) => "call",
                 Ok(AgentDecision::Status { .. }) => "status",

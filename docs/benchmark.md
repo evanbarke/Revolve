@@ -121,11 +121,17 @@ Raw data: `results/development-scripted/`, `results/held-out-scripted/`,
 - Wall-time differences here are dominated by process start-up and SQLite
   `fsync`; they are not meaningful comparisons of the architectures.
 
-## Next: live-model comparison (unperformed)
+## Live-model smoke test (performed 2026-09-29) and next steps
 
-Requires: a project-designated key in `REVOLVE_ANTHROPIC_API_KEY` (or another
-variable named in `config/planner.json`), an explicit call budget, and repeated
-trials. Suggested first pass: development suite × both arms × 3 trials. Note
+A 60-call smoke test (`nominal`, both arms, one trial, `claude-opus-5-5`) was
+run: Revolve completed 3/3 kits in 2 planning calls after an IR-format fix; the
+baseline exhausted its share with 1/3 kits built, partly because of harness
+defects that are now fixed or instrumented. Details, token counts and cost
+estimates: `results/live-smoke/summary.md`. This is not yet a comparison.
+
+A full comparison requires a key in `REVOLVE_ANTHROPIC_API_KEY` (environment or
+project `.env`; or another variable named in `config/planner.json`), an explicit
+call budget, and repeated trials. Suggested first pass: development suite × both arms × 3 trials. Note
 that the baseline needs ~25 model calls per trial against ~1–3 for Revolve, so
 a symmetric trial count is budget-dominated by the baseline; the budget flag
 counts every HTTP attempt. Cost is reported only if `pricing` (with an `as_of`

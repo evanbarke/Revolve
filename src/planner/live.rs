@@ -75,10 +75,49 @@ impl LiveConfig {
     }
 
     pub fn key_present(&self) -> bool {
-        std::env::var(&self.api_key_env)
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false)
+        secret(&self.api_key_env).is_some()
     }
+}
+
+/// Look up a secret by variable name: the process environment first, then a
+/// `.env` file in the working directory (project-local, gitignored). Only the
+/// requested name is extracted; values are never logged or copied elsewhere.
+pub fn secret(name: &str) -> Option<String> {
+    if let Ok(v) = std::env::var(name)
+        && !v.trim().is_empty()
+    {
+        return Some(v);
+    }
+    dotenv_value(&std::fs::read_to_string(".env").ok()?, name)
+}
+
+/// Parse `NAME=value` (optionally `export NAME=...`, optionally quoted) from .env text.
+fn dotenv_value(text: &str, name: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        if k.trim() != name {
+            continue;
+        }
+        let v = v.trim();
+        let v = v
+            .strip_prefix('"')
+            .and_then(|x| x.strip_suffix('"'))
+            .or_else(|| v.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')))
+            .unwrap_or(v);
+        return if v.is_empty() {
+            None
+        } else {
+            Some(v.to_string())
+        };
+    }
+    None
 }
 
 /// Durable, cross-process call budget (every HTTP attempt consumes one unit).
@@ -330,11 +369,21 @@ pub fn envelope_to_plan_response(
 pub fn envelope_to_agent_decision(env: &Value) -> std::result::Result<AgentDecision, PlannerError> {
     match env.get("decision").and_then(Value::as_str) {
         Some("call") => {
-            let args: Value = serde_json::from_str(env["arguments_json"].as_str().unwrap_or("{}"))
-                .map_err(|e| PlannerError::Malformed {
-                    message: format!("arguments_json is not JSON: {e}"),
-                })?;
+            // Tools without arguments may come back with an empty string.
+            let raw = env["arguments_json"].as_str().unwrap_or("").trim();
+            let raw = if raw.is_empty() { "{}" } else { raw };
+            let args: Value = serde_json::from_str(raw).map_err(|e| PlannerError::Malformed {
+                message: format!(
+                    "arguments_json is not JSON ({e}): {:?}",
+                    raw.chars().take(120).collect::<String>()
+                ),
+            })?;
             let retry = env["retry_of_action_id"].as_i64().filter(|v| *v >= 0);
+            if env["capability"].as_str().unwrap_or("").trim().is_empty() {
+                return Err(PlannerError::Malformed {
+                    message: "decision `call` without a capability".into(),
+                });
+            }
             Ok(AgentDecision::Call {
                 capability: env["capability"].as_str().unwrap_or("").into(),
                 version: "1".into(),
@@ -396,11 +445,10 @@ impl LivePlanner {
         let key = match self
             .test_key
             .clone()
-            .map(Ok)
-            .unwrap_or_else(|| std::env::var(&self.config.api_key_env))
+            .or_else(|| secret(&self.config.api_key_env))
         {
-            Ok(k) if !k.trim().is_empty() => k,
-            _ => {
+            Some(k) => k,
+            None => {
                 return (
                     Err(PlannerError::NotConfigured {
                         message: format!("{} not set", self.config.api_key_env),
@@ -540,11 +588,17 @@ impl Planner for LivePlanner {
         &mut self,
         req: &AgentRequest,
     ) -> (std::result::Result<AgentDecision, PlannerError>, CallInfo) {
-        let (r, info) = self.call(
+        let (r, mut info) = self.call(
             AGENT_SYSTEM,
             &serde_json::to_value(req).unwrap_or(Value::Null),
             agent_schema(),
         );
+        // Keep the raw decision (small) with the call record, so odd decisions can be diagnosed.
+        if let Ok(env) = &r {
+            let mut d = info.detail.take().unwrap_or_else(|| json!({}));
+            d["envelope"] = json!(env.to_string().chars().take(2000).collect::<String>());
+            info.detail = Some(d);
+        }
         (r.and_then(|env| envelope_to_agent_decision(&env)), info)
     }
 }
@@ -595,6 +649,51 @@ mod tests {
             envelope_to_plan_response(&env),
             Err(PlannerError::Malformed { .. })
         ));
+    }
+
+    #[test]
+    fn dotenv_lookup_extracts_only_the_named_value() {
+        let text = "# comment\nOTHER=1\nexport REVOLVE_X=\"abc def\"\nREVOLVE_Y='q'\nEMPTY=\n";
+        assert_eq!(dotenv_value(text, "REVOLVE_X").as_deref(), Some("abc def"));
+        assert_eq!(dotenv_value(text, "REVOLVE_Y").as_deref(), Some("q"));
+        assert_eq!(dotenv_value(text, "EMPTY"), None);
+        assert_eq!(dotenv_value(text, "MISSING"), None);
+    }
+
+    #[test]
+    fn a_call_without_a_capability_is_malformed_not_a_policy_matter() {
+        let env = json!({"decision": "call", "capability": "", "arguments_json": "", "retry_of_action_id": -1});
+        assert!(matches!(
+            envelope_to_agent_decision(&env),
+            Err(PlannerError::Malformed { .. })
+        ));
+    }
+
+    #[test]
+    fn empty_tool_arguments_mean_no_arguments() {
+        // Seen in the first live run: argument-less tools came back with "".
+        let env = json!({"decision": "call", "capability": "workspace.observe", "arguments_json": "",
+                         "retry_of_action_id": -1, "op_key": "", "clarification": {}, "report": {}});
+        match envelope_to_agent_decision(&env) {
+            Ok(AgentDecision::Call {
+                arguments,
+                retry_of,
+                ..
+            }) => {
+                assert_eq!(arguments, json!({}));
+                assert_eq!(retry_of, None);
+            }
+            other => panic!("{other:?}"),
+        }
+        let bad =
+            json!({"decision": "call", "capability": "workspace.pick", "arguments_json": "none"});
+        let Err(PlannerError::Malformed { message }) = envelope_to_agent_decision(&bad) else {
+            panic!()
+        };
+        assert!(
+            message.contains("\"none\""),
+            "the offending text is quoted for diagnosis: {message}"
+        );
     }
 
     #[test]

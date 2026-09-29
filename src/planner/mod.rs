@@ -81,6 +81,8 @@ pub struct PlanningRequest {
     /// Diagnostics from this planner's previous rejected proposal in this episode.
     pub feedback: Vec<Diagnostic>,
     pub limits: Limits,
+    /// The Action IR format: rules and a worked example (`ir::plan_format`).
+    pub plan_format: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -165,6 +167,8 @@ pub struct AgentRequest {
     pub history: Vec<ToolRecord>,
     pub answered_questions: Vec<AnsweredQuestion>,
     pub consumed_evidence: Vec<String>,
+    /// The tool-call format: rules and examples (`ir::call_format`).
+    pub call_format: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

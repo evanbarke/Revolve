@@ -155,12 +155,16 @@ pub fn parse_proposal(v: &Value) -> Result<PlanProposal, Vec<Diagnostic>> {
     )) {
         Ok(h) => Some(h),
         Err(e) => {
-            diags.push(diag(
-                DiagCategory::Syntax,
-                None,
-                "$",
-                format!("plan header: {e}"),
-            ));
+            let fields = header_field_diagnostics(obj);
+            if fields.is_empty() {
+                diags.push(diag(
+                    DiagCategory::Syntax,
+                    None,
+                    "$",
+                    format!("plan header: {e}"),
+                ));
+            }
+            diags.extend(fields);
             None
         }
     };
@@ -221,6 +225,114 @@ pub fn parse_proposal(v: &Value) -> Result<PlanProposal, Vec<Diagnostic>> {
         (Some(h), true) => Ok(PlanProposal { header: h, steps }),
         _ => Err(diags),
     }
+}
+
+type FieldCheck = fn(&Value) -> Result<(), String>;
+
+fn check_as<T: serde::de::DeserializeOwned>(v: &Value) -> Result<(), String> {
+    serde_json::from_value::<T>(v.clone())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// One diagnostic per bad, missing or unknown header field, each with its path and
+/// the expected shape, so a planner can repair its proposal.
+fn header_field_diagnostics(obj: &serde_json::Map<String, Value>) -> Vec<Diagnostic> {
+    use crate::ir::{Budgets, ExpectedOutcome, KitAssignment, PlanBasis};
+    let fields: &[(&str, bool, FieldCheck, &str)] = &[
+        (
+            "schema_version",
+            true,
+            check_as::<String>,
+            "a string: \"revolve.action-ir/v1\"",
+        ),
+        ("plan_id", true, check_as::<String>, "a string label"),
+        (
+            "goal_id",
+            true,
+            check_as::<String>,
+            "a string (copy goal_id from the request)",
+        ),
+        (
+            "goal_revision",
+            true,
+            check_as::<u32>,
+            "an integer (copy goal_revision from the request)",
+        ),
+        (
+            "basis",
+            true,
+            check_as::<PlanBasis>,
+            "an object {\"world_revision\": <observation.world_revision>}",
+        ),
+        (
+            "capabilities",
+            true,
+            check_as::<BTreeMap<String, String>>,
+            "an object mapping capability id to version, e.g. {\"workspace.pick\": \"1\"}",
+        ),
+        (
+            "requested_permissions",
+            true,
+            check_as::<Vec<String>>,
+            "an array of capability ids",
+        ),
+        (
+            "budgets",
+            true,
+            check_as::<Budgets>,
+            "an object {\"max_actions\", \"max_planner_rounds\", \"max_elapsed_ms\"}",
+        ),
+        (
+            "kit_assignments",
+            false,
+            check_as::<Vec<KitAssignment>>,
+            "an array of {\"kit\", \"tray_id\"}",
+        ),
+        ("explanation", true, check_as::<String>, "a short string"),
+        (
+            "expected_outcome",
+            false,
+            check_as::<ExpectedOutcome>,
+            "an object {\"kits_complete\": [tray ids], \"kits_incomplete\": [...]}",
+        ),
+    ];
+    let mut d = vec![];
+    for (name, required, check, shape) in fields {
+        match obj.get(*name) {
+            None if *required => d.push(diag(
+                DiagCategory::Syntax,
+                None,
+                format!("$.{name}"),
+                format!("missing required field; expected {shape}"),
+            )),
+            None => {}
+            Some(v) => {
+                if let Err(e) = check(v) {
+                    d.push(diag(
+                        DiagCategory::Syntax,
+                        None,
+                        format!("$.{name}"),
+                        format!("expected {shape} ({e})"),
+                    ));
+                }
+            }
+        }
+    }
+    for k in obj.keys() {
+        if k != "steps"
+            && !RUNTIME_OWNED_FIELDS.contains(&k.as_str())
+            && !fields.iter().any(|(n, ..)| n == k)
+        {
+            d.push(diag(
+                DiagCategory::Syntax,
+                None,
+                format!("$.{k}"),
+                "unknown field",
+            ));
+        }
+    }
+    d
 }
 
 pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, Vec<Diagnostic>> {

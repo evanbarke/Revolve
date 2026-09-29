@@ -250,3 +250,73 @@ pub struct PlanProposal {
 pub fn make_ref(step_id: &str, output: &str) -> serde_json::Value {
     serde_json::json!({ "$ref": format!("{step_id}.{output}") })
 }
+
+/// The plan format handed to every planner with each request: rules plus a small,
+/// valid-shaped example (values are illustrative; bind ids/revisions from the request).
+pub fn plan_format() -> serde_json::Value {
+    serde_json::json!({
+        "notes": [
+            "Return one JSON object with exactly the fields shown in `example` (kit_assignments and expected_outcome may be empty; step fields preconditions, postconditions, on_unknown_outcome, retry and note are optional).",
+            "`capabilities` is an OBJECT mapping capability id to version, e.g. {\"workspace.pick\": \"1\"}; list every capability the steps use, and repeat the ids in `requested_permissions` (an array of strings).",
+            "Copy goal_id, goal_revision and basis.world_revision from the request (goal_id, goal_revision, observation.world_revision).",
+            "Each step: step_id (unique), capability, capability_version, depends_on (step ids), arguments (exactly the capability's argument names).",
+            "Reference another step's output with {\"$ref\": \"<step_id>.<output>\"}; the referenced step must be a (transitive) dependency.",
+            "Condition kinds: object_at{object_id,location_id}, gripper_empty, gripper_holds{object_id}, location_available{location_id}, quantity_at_least{location_id,part_kind,quantity}, goal_revision_equals{revision} (preconditions only).",
+            "inventory.consume and inventory.return record exactly one unit (quantity 1) with the object as evidence."
+        ],
+        "example": {
+            "schema_version": ACTION_IR_VERSION,
+            "plan_id": "example-plan",
+            "goal_id": "goal-example",
+            "goal_revision": 1,
+            "basis": {"world_revision": 0},
+            "capabilities": {"inventory.reserve": "1", "workspace.pick": "1", "workspace.place": "1", "inventory.consume": "1", "inventory.release": "1"},
+            "requested_permissions": ["inventory.reserve", "workspace.pick", "workspace.place", "inventory.consume", "inventory.release"],
+            "budgets": {"max_actions": 120, "max_planner_rounds": 12, "max_elapsed_ms": 600000},
+            "kit_assignments": [{"kit": 1, "tray_id": "tray-1"}],
+            "explanation": "Reserve one red block, place it in tray-1, record its consumption, release the rest.",
+            "expected_outcome": {"kits_complete": [], "kits_incomplete": [{"kit": 1, "tray_id": "tray-1", "missing": {"washer": 2}, "reason": "example only"}]},
+            "steps": [
+                {"step_id": "reserve", "capability": "inventory.reserve", "capability_version": "1", "depends_on": [],
+                 "arguments": {"counts": {"red_block": 1}}},
+                {"step_id": "pick-red-01", "capability": "workspace.pick", "capability_version": "1", "depends_on": ["reserve"],
+                 "arguments": {"object_id": "red-01", "source_id": "bin-red"},
+                 "preconditions": [{"kind": "gripper_empty"}, {"kind": "object_at", "object_id": "red-01", "location_id": "bin-red"}],
+                 "postconditions": [{"kind": "gripper_holds", "object_id": "red-01"}]},
+                {"step_id": "place-red-01", "capability": "workspace.place", "capability_version": "1", "depends_on": ["pick-red-01"],
+                 "arguments": {"object_id": {"$ref": "pick-red-01.object_id"}, "destination_id": "tray-1"},
+                 "postconditions": [{"kind": "object_at", "object_id": "red-01", "location_id": "tray-1"}]},
+                {"step_id": "consume-red-01", "capability": "inventory.consume", "capability_version": "1", "depends_on": ["place-red-01"],
+                 "arguments": {"reservation_id": {"$ref": "reserve.reservation_id"}, "part_kind": "red_block", "quantity": 1, "evidence_object_id": "red-01"}},
+                {"step_id": "release", "capability": "inventory.release", "capability_version": "1", "depends_on": ["consume-red-01"],
+                 "arguments": {"reservation_id": {"$ref": "reserve.reservation_id"}}}
+            ]
+        }
+    })
+}
+
+/// The tool-call format handed to the direct-tool baseline with each request.
+pub fn call_format() -> serde_json::Value {
+    serde_json::json!({
+        "notes": [
+            "Choose one decision per turn. For a tool call, `capability` is a tool id and `arguments_json` is a JSON object string with exactly that tool's argument names.",
+            "inventory.consume / inventory.return record exactly one unit (quantity 1) citing the object as evidence.",
+            "Use `status` with an op_key from history to learn the outcome of a call that timed out or was interrupted; retry an earlier call under the same key with retry_of_action_id (otherwise -1)."
+        ],
+        "examples": [
+            {"decision": "call", "capability": "workspace.pick", "arguments_json": "{\"object_id\":\"red-01\",\"source_id\":\"bin-red\"}", "retry_of_action_id": -1},
+            {"decision": "call", "capability": "inventory.consume", "arguments_json": "{\"reservation_id\":\"res-abc\",\"part_kind\":\"red_block\",\"quantity\":1,\"evidence_object_id\":\"red-01\"}", "retry_of_action_id": -1}
+        ]
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn plan_format_example_is_a_well_formed_proposal() {
+        let ex = super::plan_format()["example"].clone();
+        let p = crate::compiler::parse_proposal(&ex)
+            .expect("the example handed to planners must parse");
+        assert_eq!(p.steps.len(), 5);
+    }
+}

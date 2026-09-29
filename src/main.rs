@@ -114,6 +114,13 @@ enum Cmd {
         #[arg(long, hide = true)]
         report_rss: bool,
     },
+    /// Score an existing run against simulator truth (independent evaluator).
+    Evaluate {
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Show run status.
     Status {
         #[arg(long)]
@@ -425,6 +432,16 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             }
             if !quiet {
                 eprintln!("[revolve] executor exiting with run status `{status}`");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Evaluate { run, json } => {
+            let dir = harness::run_dir(sd, &run)?;
+            let v = eval::evaluate_run(&dir)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            } else {
+                println!("{}", eval::summarize_verdict(&v));
             }
             Ok(ExitCode::SUCCESS)
         }

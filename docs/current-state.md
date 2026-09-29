@@ -17,8 +17,10 @@ _Last updated: 2026-09-29, end of the first build session._
 
 On Windows (debug and release) and on the Jetson (release):
 
-- `cargo test` — 39 tests pass on Windows and on the Jetson (16 unit, 23
-  integration), at the final commit.
+- `cargo test` — 43 tests pass on Windows (20 unit, 23 integration). The
+  Jetson ran the 39 that existed at the review-fix commit; the four newer unit
+  tests (plan-format example, .env lookup, empty-call handling) have run on
+  Windows only.
 - `cargo clippy --all-targets` — no warnings; `cargo fmt` applied.
 - `revolve demo --scenario <each of 17 demo scenarios>` — expected outcome, evaluator PASS (both arms via `tests/evaluator.rs`).
 - `revolve run --scenario nominal --plan examples/plans/kit-assembly.json` — completed, PASS.
@@ -29,10 +31,12 @@ On Windows (debug and release) and on the Jetson (release):
 
 ## Not performed / unverified
 
-- **Live model**: no calls made. The adapter is tested only against fixtures
-  and a local fake HTTP endpoint. Needs a project-designated key and an
-  explicit call budget from the owner. (An `ANTHROPIC_API_KEY` exists in the dev
-  host environment; it was deliberately not used.)
+- **Live model**: only a 60-call smoke test (approved budget, fully used) on
+  `nominal`: Revolve completed after an IR-format fix; the baseline did not
+  finish within its share (harness defects, now fixed or instrumented). See
+  `results/live-smoke/summary.md`. The key now comes from
+  `REVOLVE_ANTHROPIC_API_KEY` (environment or gitignored `.env`); the config
+  points there. No live comparison has been run.
 - Real network partition on the Jetson (planner loss is a harness flag).
 - UI tested with screenshots and API calls, not with an interactive browser session.
 - The pasted master brief was truncated at "Ask for an explicit API-call budget
@@ -59,6 +63,7 @@ server unit tests.
 
 ## Next concrete task
 
-Obtain an API-call budget decision, then run the live H1 comparison on the
-development suite (both arms × 3 trials) and write up the results next to the
-scripted ones in `docs/benchmark.md`.
+With a new call budget: re-run the baseline on `nominal` (~45 calls) and inspect
+the recorded decision envelopes (`planner_calls.detail`) to explain the empty
+decisions; decide on a typed `arguments` object for the baseline schema; then run
+the development suite on both arms and report it next to the scripted results.

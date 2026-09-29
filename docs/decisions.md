@@ -56,7 +56,11 @@ that feature requires `additionalProperties: false` on every object, the schema
 constrains an envelope and the plan travels as a JSON string that Revolve
 parses and compiles itself. Key variable defaults to `REVOLVE_ANTHROPIC_API_KEY`
 so that a key present in the environment for other purposes is never used
-implicitly. No live calls were made: no budget has been approved.
+implicitly; it is looked up in the environment, then in a gitignored project
+`.env` (only the named variable is read). A Claude.ai subscription is not an API
+credential (Messages API: API keys or workload identity; Agent SDK docs: API
+keys, and no claude.ai login for third-party products), so the planner does not
+use one. The first live calls were a 60-call smoke test approved by the owner.
 
 **D11 — UI boundary.** Loopback bind only. Mutations require a custom header
 (forces a CORS preflight that is never granted), a loopback Host (DNS-rebinding

@@ -68,6 +68,7 @@ revolve run --scenario nominal --plan examples/plans/kit-assembly.json
 revolve validate --plan examples/plans/invalid-cycle.json [--scenario nominal]
 revolve resume --run <id>            # the executor; also recovers after a crash
 revolve status [--run <id>] [--json]
+revolve evaluate --run <id> [--json]  # score a run against simulator truth
 revolve correct --run <id> --goal-file examples/goals/two-kits.json | --request "<text>"
 revolve answer --run <id> --question <n> --choice <option>
 revolve pause --run <id> | cancel --run <id>
@@ -89,9 +90,10 @@ crash (executor only).
 - **configured (live)**: Anthropic Messages API over HTTP. Copy
   `config/planner.example.json` to `config/planner.json`, put a key in the
   variable it names (default `REVOLVE_ANTHROPIC_API_KEY`) and pass an explicit
-  `--budget <max HTTP calls>`. Without them the command refuses with exit 3; it
-  never falls back to the scripted planner. **Live-model runs have not been
-  performed yet.**
+  `--budget <max HTTP calls>`. The key is read from the environment or from a
+  gitignored `.env` in the project directory. Without a key or budget the command
+  refuses with exit 3; it never falls back to the scripted planner. Only a
+  60-call smoke test has been run so far (`results/live-smoke/summary.md`).
 
 ## Tests
 

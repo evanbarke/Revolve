@@ -794,6 +794,7 @@ impl Executor {
                 summary: self.summary()?,
                 feedback: feedback.clone(),
                 limits: self.opts.limits,
+                plan_format: crate::ir::plan_format(),
             };
             self.store.bump_planner_decisions()?;
             let (resp, info) = self.planner.plan(&req);
