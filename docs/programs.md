@@ -97,9 +97,11 @@ AI what to use instead (see `script/syntax.rs` and `script/check.rs`).
 Nothing in the source world changes. A test checks that the prediction matches
 the real run on a fault-free table.
 
-## Evidence (2026-09-29, Windows x86_64)
+## Evidence (2026-09-29, Windows x86_64 and the Jetson)
 
-- 79 tests pass, including:
+- 79 tests pass on Windows and on the Jetson Orin Nano. On the Jetson the same
+  program compiles to the same Wasm hash, and the power-cut and part-taken tables
+  complete in about 0.6 s each. The tests include:
   - `tests/programs.rs` (8): run, power cut with no repeated move, part taken
     mid-run, question, mid-run replacement, rehearsal equals run, stale program
     refused, computed destination held to policy;

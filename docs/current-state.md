@@ -28,8 +28,12 @@ thoughts-to-action and a wearable Jetson are later stages.
 
 On Windows (debug and release) and on the Jetson (release):
 
-- `cargo test` — 79 tests pass on Windows (42 unit, 37 integration). The Jetson
-  ran the 60 that existed at vision step 1; see "Jetson" below for step 2.
+- `cargo test` — 79 tests pass on Windows and on the Jetson (42 unit, 37
+  integration).
+- Jetson, vision step 2: native build 2 min; `script check` gives the same Wasm
+  hash as Windows; the power-cut table recovers and completes (2 executor
+  processes, about 0.66 s); the table where someone takes a part completes with
+  the missing part reported (about 0.6 s).
 - `revolve script check|run` on the three example programs and the four
   playground tables (power cut: 2 executor processes, 11 moves, none repeated;
   thief: the missing part reported, program completed).
