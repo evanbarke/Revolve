@@ -4,6 +4,11 @@
 > real code and robotic movements. My vision is a new integrated being mixing
 > robot, AI and human." (project owner, 2026-09-29)
 
+> "The ultimate goal is VR and taking thoughts to action, but it can be words at
+> first because we don't have a brain–machine interface besides Neuralink for the
+> moment. I have a Meta Quest 3 to test on later. And we can try to turn the
+> Jetson into a wearable with a battery pack later." (2026-09-29)
+
 ## The idea in engineering terms
 
 This is one system with a shared language at its centre:
@@ -25,6 +30,13 @@ human intent ──► AI writes a program ──► compiler checks it ──�
   the AI never commands motors directly.
 - **The program** is the shared contract. The AI writes it, the compiler checks it,
   the machine runs it, and the human can read it (explained in plain words).
+
+**Intent sources are pluggable.** Words come first (typed, then spoken). Later
+sources are VR (gaze, gestures, hands) and eventually neural signals. Everything
+downstream stays the same: confirm, program, compile, check, act. The noisier the
+input channel (speech, EEG, a brain–computer interface), the more the
+confirmation step and the compile-time checks matter. A misread thought must
+never become an unchecked movement.
 
 ## Where the prototype stands (M0–M4)
 
@@ -53,6 +65,18 @@ human intent ──► AI writes a program ──► compiler checks it ──�
    the safety layer enforces them at run time.
 4. **Hardware.** Only after a requirements brief and an explicit decision to buy
    anything; a local safety controller and an independent stop come first.
+5. **VR front end (Meta Quest 3, owned).** A WebXR view of the workspace and the
+   plan in the Quest browser. Intent comes from voice, gaze and hands, with
+   confirmation in VR. Transport keeps the server loopback-only: USB with
+   `adb reverse` first, and LAN access only after authentication exists (as the
+   brief requires).
+6. **Wearable Jetson.** Battery-powered runtime and compiler on the body. For
+   scale: the measured workload mean was about 5 W at the board input, but local
+   model inference would draw far more. Pack size, heat and a safe power path
+   need measuring first; no power-mode changes as a routine step.
+7. **Neural intent (research).** Only through an existing, legitimately
+   available interface. It stays behind the same confirmation and checking
+   layers.
 
 ## Honest context
 
