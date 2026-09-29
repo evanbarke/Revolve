@@ -362,7 +362,11 @@ fn act(ctx: &Ctx, run_id: &str, action: &str, body: &str) -> Result<Value> {
                 .as_str()
                 .ok_or_else(|| Error::new("choice required"))?;
             let out = RunStore::open(&dir)?.answer(q, choice, "human (ui)")?;
-            Ok(json!({"ok": true, "message": out}))
+            // The run was waiting only for this answer: continue it.
+            if !OwnerLock::is_held(&dir) {
+                spawn_executor(ctx, run_id)?;
+            }
+            Ok(json!({"ok": true, "message": format!("{out}; continuing")}))
         }
         "sim" => {
             let mut w = SimWorld::open(&dir.join("world.db"))?;
@@ -434,7 +438,7 @@ fn run_view(ctx: &Ctx, run_id: &str) -> Result<Value> {
         .map(|p| {
             json!({
                 "plan_seq": p.plan_seq, "status": p.status, "goal_revision": p.goal_revision, "planner": p.planner,
-                "world_revision": p.world_revision, "explanation": p.proposal.get("explanation"),
+                "world_revision": p.world_revision, "explanation": p.proposal.get("explanation"), "kit_assignments": p.proposal.get("kit_assignments"),
                 "steps": p.proposal.get("steps").and_then(Value::as_array).map(|s| s.len()),
                 "diagnostics": p.diagnostics
             })
@@ -479,7 +483,7 @@ fn run_view(ctx: &Ctx, run_id: &str) -> Result<Value> {
         "inventory": inventory::view(&store)?,
         "ledger": inventory::ledger(&store)?.into_iter().rev().take(40).collect::<Vec<_>>(),
         "questions": store.questions()?,
-        "events": store.events(0, 100_000)?.into_iter().rev().take(120).collect::<Vec<_>>(),
+        "events": store.events(0, 100_000)?.into_iter().rev().take(400).collect::<Vec<_>>(),
         "planner_calls": store.planner_call_stats()?,
         "workspace_truth": {"label": "simulator ground truth (the planner never sees this view)", "locations": truth_locs, "removed": removed,
                             "evidence_withheld_from_system": withheld, "planner_offline": truth.planner_offline, "world_revision": truth.world_revision,

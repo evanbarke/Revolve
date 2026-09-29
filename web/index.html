@@ -10,116 +10,138 @@
 <header class="top">
   <div class="brand">
     <h1>Revolve</h1>
-    <p class="sub">Explicit-intent execution runtime &middot; offline simulator (not a physical robot)</p>
+    <p class="sub">Kit assembly in a simulated workspace (no real robot)</p>
   </div>
   <div class="runbar">
-    <label>Run <select id="run-select"></select></label>
-    <button id="btn-refresh" class="ghost" type="button">Refresh list</button>
+    <label class="inline">Previous runs <select id="run-select"></select></label>
+    <button id="btn-refresh" class="ghost" type="button">Refresh</button>
+    <label class="check inline"><input type="checkbox" id="tech-toggle"> Technical details</label>
   </div>
 </header>
 
-<main class="grid">
-  <section class="col left">
-    <div class="card">
-      <h2>New run</h2>
-      <form id="new-run">
-        <label>Scenario <select id="scenario-select"></select></label>
-        <p id="scenario-desc" class="muted small"></p>
-        <label>Architecture
-          <select id="arm-select">
-            <option value="revolve">Revolve (plan &rarr; compile &rarr; execute &rarr; verify)</option>
-            <option value="baseline">Direct tool calling (baseline)</option>
-          </select>
-        </label>
-        <label class="check"><input type="checkbox" id="scripted-human"> Let the harness play the human (answers, scripted corrections)</label>
-        <label>Request (optional, restricted grammar)
+<main class="simple">
+  <!-- Start a run -->
+  <section class="card" id="start-card">
+    <h2>Start a run</h2>
+    <form id="new-run">
+      <label>What should happen?
+        <select id="scenario-select"></select>
+      </label>
+      <p id="scenario-desc" class="muted"></p>
+      <details class="advanced">
+        <summary>More options</summary>
+        <label>Your own request (only this phrasing is understood offline)
           <input id="new-request" type="text" placeholder="Prepare 3 kits. Each kit needs one red block, one blue block, and two washers.">
         </label>
-        <button type="submit">Create run</button>
-      </form>
-      <p class="muted small">Planner: <strong>scripted, rule-based</strong>. It accepts only the kit task family's phrasing; it is not an AI interpretation of free text. Live-model runs are CLI-only and need an explicit budget.</p>
-    </div>
+        <label>How the AI works
+          <select id="arm-select">
+            <option value="revolve">Plans the whole job, checks the plan, then carries it out (Revolve)</option>
+            <option value="baseline">Decides one action at a time (comparison)</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="scripted-human"> Answer questions automatically (for demos)</label>
+        <label class="check"><input type="checkbox" id="show-all-scenarios"> Show test scenarios too</label>
+      </details>
+      <button type="submit" class="big">Start</button>
+    </form>
+  </section>
 
-    <div class="card">
-      <h2>Controls</h2>
-      <div class="buttons">
-        <button id="btn-start" type="button">Start / Resume</button>
-        <button id="btn-pause" type="button" class="ghost">Pause</button>
-        <button id="btn-cancel" type="button" class="danger">Cancel run</button>
-      </div>
-      <p class="muted small">Pause and cancel are logical execution controls. They are not a safety-rated emergency stop.</p>
-      <p id="executor-line" class="small"></p>
+  <!-- Now -->
+  <section class="card now" id="now-card">
+    <div class="now-head">
+      <div id="now-badge" class="badge">Nothing running</div>
+      <div id="now-progress" class="muted"></div>
     </div>
-
-    <div class="card" id="question-card" hidden>
-      <h2>Your input is needed</h2>
+    <p id="now-title" class="now-title">Choose what should happen above and press Start.</p>
+    <p id="now-detail" class="muted"></p>
+    <div class="progress" id="progress-bar" hidden><div id="progress-fill"></div></div>
+    <div id="question-box" class="question" hidden>
       <p id="question-prompt"></p>
       <div id="question-options" class="buttons"></div>
     </div>
+    <div id="now-actions" class="buttons"></div>
+    <p class="fineprint">Pause and Stop control the software only; they are not an emergency stop for real machinery.</p>
+  </section>
 
-    <div class="card">
-      <h2>Goal <span id="goal-rev" class="pill"></span></h2>
-      <p id="goal-summary"></p>
-      <p id="goal-text" class="muted small"></p>
-      <details>
-        <summary>Change the goal</summary>
+  <div class="two">
+    <!-- Request -->
+    <section class="card">
+      <h2>Your request</h2>
+      <p id="goal-summary" class="goal-line"></p>
+      <ul id="goal-decisions" class="plain"></ul>
+      <details id="change-goal">
+        <summary>Change the request</summary>
         <form id="correct-form">
           <div class="row">
             <label>Kits <input id="c-qty" type="number" min="1" max="8" value="3"></label>
-            <label>Red <input id="c-red" type="number" min="0" max="6" value="1"></label>
-            <label>Blue <input id="c-blue" type="number" min="0" max="6" value="1"></label>
-            <label>Green <input id="c-green" type="number" min="0" max="6" value="0"></label>
+            <label>Red blocks <input id="c-red" type="number" min="0" max="6" value="1"></label>
+            <label>Blue blocks <input id="c-blue" type="number" min="0" max="6" value="1"></label>
+            <label>Green blocks <input id="c-green" type="number" min="0" max="6" value="0"></label>
             <label>Washers <input id="c-washer" type="number" min="0" max="6" value="2"></label>
           </div>
-          <button type="submit">Submit correction</button>
+          <p class="muted small">Per kit. Work already done stays done; it re-plans from what is on the table.</p>
+          <button type="submit">Apply change</button>
         </form>
-        <p class="muted small">A correction becomes a new goal revision. Dispatch from the old revision stops; anything already done stays done; the planner replans against what is observed.</p>
       </details>
+    </section>
+
+    <!-- Kits -->
+    <section class="card">
+      <h2>Kits</h2>
+      <ul id="kits" class="kits"></ul>
+      <p id="stock-line" class="muted"></p>
+    </section>
+  </div>
+
+  <!-- Workspace -->
+  <section class="card">
+    <h2>Workspace</h2>
+    <svg id="workspace" viewBox="0 0 900 380" role="img" aria-label="Simulated workspace"></svg>
+    <div class="legend small">
+      <span><i class="sw red"></i>red block</span><span><i class="sw blue"></i>blue block</span><span><i class="sw green"></i>green block</span><span><i class="sw washer"></i>washer</span><span><i class="sw unknown"></i>unidentified item</span><span><i class="sw hidden"></i>currently hidden from the system</span>
+    </div>
+  </section>
+
+  <!-- Story -->
+  <section class="card">
+    <h2>What happened</h2>
+    <ol id="story" class="story"></ol>
+  </section>
+</main>
+
+<!-- Technical view -->
+<main id="tech" class="grid" hidden>
+  <section class="col">
+    <div class="card">
+      <h2>Run</h2>
+      <p id="run-meta" class="muted small"></p>
+      <p id="status-reason" class="small"></p>
+      <p id="executor-line" class="small"></p>
       <ol id="goal-history" class="history small"></ol>
     </div>
-
     <div class="card sim">
-      <h2>Simulation controls <span class="pill warn">harness only</span></h2>
-      <p class="muted small">These change the simulated world or its failure modes. The planner never sees them, only their observable effects.</p>
+      <h2>Simulation controls <span class="pill warn">test harness</span></h2>
+      <p class="muted small">Change the simulated world or its failures. The planner never sees these, only their effects.</p>
       <div class="buttons">
-        <button type="button" class="ghost" data-sim="crash_next_place">Crash executor after next place</button>
-        <button type="button" class="ghost" data-sim="timeout_blackout_next_pick">Time out next pick &amp; withhold evidence</button>
+        <button type="button" class="ghost" data-sim="crash_next_place">Crash worker after next place</button>
+        <button type="button" class="ghost" data-sim="timeout_blackout_next_pick">Time out next pick &amp; hide evidence</button>
         <button type="button" class="ghost" data-sim="restore_evidence">Restore evidence</button>
         <button type="button" class="ghost" data-sim="planner_offline">Planner offline</button>
         <button type="button" class="ghost" data-sim="planner_online">Planner online</button>
       </div>
       <div id="tray-toggles" class="buttons"></div>
     </div>
-  </section>
-
-  <section class="col center">
     <div class="card">
-      <div class="status-row">
-        <div id="status-badge" class="badge">No run selected</div>
-        <div id="status-reason" class="small"></div>
-      </div>
-      <p id="run-meta" class="muted small"></p>
-    </div>
-    <div class="card">
-      <h2>Workspace <span class="muted small" id="world-rev"></span></h2>
-      <p class="muted small">Simulator ground truth, drawn for you. The system sees only its observations; hatched areas are currently hidden from it.</p>
-      <svg id="workspace" viewBox="0 0 900 380" role="img" aria-label="Simulated workspace"></svg>
-      <div class="legend small">
-        <span><i class="sw red"></i>red block</span><span><i class="sw blue"></i>blue block</span><span><i class="sw green"></i>green block</span><span><i class="sw washer"></i>washer</span><span><i class="sw unknown"></i>unclassified item</span>
-      </div>
-    </div>
-    <div class="card">
-      <h2>Verified result</h2>
+      <h2>Verified report</h2>
       <div id="report"></div>
     </div>
     <div class="card">
       <h2>Inventory record</h2>
       <table id="inventory" class="table small"></table>
-      <details><summary class="small">Ledger (latest)</summary><ol id="ledger" class="history small"></ol></details>
+      <ol id="ledger" class="history small"></ol>
     </div>
   </section>
-
-  <section class="col right">
+  <section class="col">
     <div class="card">
       <h2>Plan <span id="plan-label" class="pill"></span></h2>
       <p id="plan-explanation" class="small"></p>
@@ -127,7 +149,7 @@
       <ol id="steps" class="steps small"></ol>
     </div>
     <div class="card">
-      <h2>Event timeline</h2>
+      <h2>Event log</h2>
       <ol id="events" class="events small"></ol>
     </div>
   </section>
