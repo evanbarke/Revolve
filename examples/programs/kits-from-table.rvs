@@ -1,0 +1,21 @@
+# Build as many kits as the table allows: each kit is 1 red block, 1 blue block
+# and 1 washer, one kit per tray.
+def first(kind):
+    found = parts(kind=kind, at="table")
+    return found[0] if len(found) > 0 else None
+
+kits = 0
+for tray in places(kind="tray"):
+    red = first("red_block")
+    blue = first("blue_block")
+    washer = first("washer")
+    if red is None or blue is None or washer is None:
+        break
+    move(red, tray)
+    move(blue, tray)
+    move(washer, tray)
+    kits += 1
+say("Built", kits, "kits")
+
+expect count("tray-1") == 3, "tray 1 holds a complete kit"
+expect count("tray-2") == 3, "tray 2 holds a complete kit"

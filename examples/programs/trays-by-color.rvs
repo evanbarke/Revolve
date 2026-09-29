@@ -1,0 +1,26 @@
+# Sort the table into trays by color: red -> tray 1, blue -> tray 2,
+# green -> tray 3, washers -> tray 4. Ask what to do with anything unidentified.
+def tray_for(kind):
+    if kind == "red_block":
+        return "tray-1"
+    elif kind == "blue_block":
+        return "tray-2"
+    elif kind == "green_block":
+        return "tray-3"
+    elif kind == "washer":
+        return "tray-4"
+    return None
+
+for p in parts(at="table"):
+    dest = tray_for(p.kind)
+    if dest is None:
+        choice = ask("I can't identify " + p.id + ". What should I do with it?", ["put it in tray 4", "leave it on the table"])
+        if choice == "put it in tray 4":
+            move(p, "tray-4")
+    else:
+        move(p, dest)
+
+expect count("tray-1", kind="red_block") == 3, "tray 1 holds the 3 red blocks"
+expect count("tray-2", kind="blue_block") == 2, "tray 2 holds the 2 blue blocks"
+expect count("tray-3", kind="green_block") == 2, "tray 3 holds the 2 green blocks"
+expect count("tray-4", kind="washer") == 3, "tray 4 holds the 3 washers"

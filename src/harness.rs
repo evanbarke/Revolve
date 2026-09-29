@@ -45,6 +45,8 @@ impl Arm {
 #[derive(Debug, Clone)]
 pub enum PlannerChoice {
     Scripted,
+    /// A Revolve Script program run: the program is submitted, never planned.
+    Program,
     Fixed(PathBuf),
     /// Live provider: config file + budget ledger path.
     Live {
@@ -132,6 +134,7 @@ pub fn create_run_with(
     std::fs::write(dir.join("scenario.json"), serde_json::to_string_pretty(sc)?)?;
     let label = match planner {
         PlannerChoice::Scripted => "scripted".to_string(),
+        PlannerChoice::Program => "program".to_string(),
         PlannerChoice::Fixed(p) => {
             let text = std::fs::read_to_string(p)
                 .map_err(|e| Error::new(format!("reading plan {}: {e}", p.display())))?;
@@ -169,8 +172,148 @@ pub fn create_run_with(
     Ok((run_id, dir))
 }
 
+/// Create a program run on a scenario's table and submit its first program.
+/// `proposal` holds `source` plus anything to keep with it (explanation, author,
+/// rehearsal); the language tag is added here.
+pub fn create_program_run(
+    state_dir: &Path,
+    sc: &Scenario,
+    mut proposal: Value,
+    author: &str,
+    human_mode: &str,
+) -> Result<(String, PathBuf)> {
+    if proposal.get("source").and_then(Value::as_str).is_none() {
+        bail!("a program proposal needs `source`");
+    }
+    proposal["language"] = Value::String(crate::script::LANGUAGE.into());
+    let (run_id, dir) = create_run_with(
+        state_dir,
+        sc,
+        Arm::Revolve,
+        &PlannerChoice::Program,
+        human_mode,
+        ExecEngine::Compiled,
+    )?;
+    RunStore::open(&dir)?.submit_program(&proposal, author, "first program", false)?;
+    Ok((run_id, dir))
+}
+
+/// What a program did in a rehearsal on a copy of the table.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Rehearsal {
+    pub status: String,
+    pub reason: Option<String>,
+    pub report: Option<Value>,
+    /// Questions the program asked, with the answer the rehearsal assumed (the first option).
+    pub questions: Vec<Value>,
+    /// Where every part ended up: {id, kind, at}.
+    pub end_state: Vec<Value>,
+    /// Successful moves in order: {line, part, from, to}.
+    pub moves: Vec<Value>,
+    pub duration_ms: i64,
+}
+
+/// Rehearse a program on a digital twin of `world` (the scenario's table, or a
+/// running run's table as it is now). The twin has no faults; nothing in `world`
+/// changes. The twin is deleted afterwards.
+pub fn rehearse(
+    state_dir: &Path,
+    world: &Path,
+    goal: &crate::model::GoalSpec,
+    source: &str,
+) -> Result<Rehearsal> {
+    let id = fresh_id("twin");
+    let dir = state_dir.join("rehearsals").join(&id);
+    std::fs::create_dir_all(&dir)?;
+    let result = (|| -> Result<Rehearsal> {
+        SimWorld::open(world)?.snapshot_twin(&dir.join("world.db"))?;
+        let meta = RunMeta {
+            run_id: id.clone(),
+            arm: "revolve".into(),
+            planner: "program".into(),
+            scenario_id: "twin".into(),
+            human_mode: "scripted".into(),
+            created_at_ms: now_ms(),
+            seed: 0,
+            engine: "compiled".into(),
+        };
+        RunStore::create(&dir, &meta, goal, &crate::model::KindCounts::new())?;
+        RunStore::open(&dir)?.submit_program(
+            &serde_json::json!({"language": crate::script::LANGUAGE, "source": source}),
+            "rehearsal",
+            "rehearsal on a digital twin",
+            false,
+        )?;
+        let t0 = now_ms();
+        let mut questions = vec![];
+        for _ in 0..30 {
+            let status = crate::runtime::drive(
+                &dir,
+                Box::new(crate::planner::NoPlanner),
+                None,
+                ExecOptions {
+                    quiet: true,
+                    ..Default::default()
+                },
+            )?;
+            if status != R_AWAITING_HUMAN {
+                break;
+            }
+            let mut store = RunStore::open(&dir)?;
+            for q in store.open_questions()? {
+                let Some(first) = q.options.first() else {
+                    continue;
+                };
+                store.answer(
+                    q.question_id,
+                    &first.id,
+                    "rehearsal (assumed the first option)",
+                )?;
+                questions.push(serde_json::json!({"question": q.prompt, "assumed": first.label}));
+            }
+        }
+        let store = RunStore::open(&dir)?;
+        let st = store.state()?;
+        let truth = SimWorld::open(&dir.join("world.db"))?.truth()?;
+        let end_state = truth
+            .objects
+            .iter()
+            .map(|o| serde_json::json!({"id": o.object_id, "kind": o.observed_kind, "at": o.location_id}))
+            .collect();
+        let actions = store.actions()?;
+        let moves = actions
+            .iter()
+            .filter(|a| a.capability == "workspace.place" && a.status == A_SUCCEEDED)
+            .map(|a| {
+                let from = actions
+                    .iter()
+                    .rev()
+                    .find(|p| p.capability == "workspace.pick" && p.seq < a.seq && p.arguments["object_id"] == a.arguments["object_id"])
+                    .and_then(|p| p.resolved_arguments.as_ref())
+                    .and_then(|r| r.get("source_id").cloned());
+                let line = a.step_id.trim_start_matches('L').split('.').next().and_then(|l| l.parse::<u32>().ok());
+                serde_json::json!({"line": line, "part": a.arguments["object_id"], "from": from, "to": a.arguments["destination_id"]})
+            })
+            .collect();
+        Ok(Rehearsal {
+            status: st.status,
+            reason: st.status_reason,
+            report: st.final_report,
+            questions,
+            end_state,
+            moves,
+            duration_ms: now_ms() - t0,
+        })
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
 /// Build the planner recorded for a run. A live run never falls back to scripted.
 pub fn planner_for(dir: &Path, meta: &RunMeta) -> Result<Box<dyn Planner>> {
+    if meta.planner == "program" {
+        return Ok(Box::new(crate::planner::NoPlanner));
+    }
     let inner: Box<dyn Planner> = if meta.planner == "scripted" {
         Box::new(ScriptedPlanner)
     } else if meta.planner == "fixed-plan" {

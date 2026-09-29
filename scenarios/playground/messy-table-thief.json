@@ -1,0 +1,50 @@
+{
+  "id": "messy-table-thief",
+  "family": "playground",
+  "description": "The messy table; someone takes a red block off the table after the 2nd part is placed.",
+  "seed": 1,
+  "world": {
+    "stock": {
+      "red_block": 0,
+      "blue_block": 0,
+      "green_block": 0,
+      "washer": 0
+    },
+    "table": {
+      "red_block": 3,
+      "blue_block": 2,
+      "green_block": 2,
+      "washer": 3
+    },
+    "unknown_items": [
+      {
+        "bin": "table",
+        "true_kind": "scrap"
+      }
+    ],
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 1,
+    "kit_components": {
+      "red_block": 1
+    },
+    "source_text": "(playground: the request comes with the program)"
+  },
+  "faults": [
+    {
+      "kind": "remove_object",
+      "on": {
+        "capability": "workspace.place",
+        "nth": 2
+      },
+      "object_id": "red-03"
+    }
+  ],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 0,
+    "note": "playground: judged by the program's own expectations, checked by observation"
+  }
+}

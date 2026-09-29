@@ -33,6 +33,9 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+mod script;
+use script::ScriptOutcome;
+
 #[derive(Debug, Clone, Default)]
 pub struct ExecOptions {
     pub step_delay_ms: u64,
@@ -85,6 +88,9 @@ pub struct Executor {
     opts: ExecOptions,
     engine: ExecEngine,
     programs: Option<ProgramHost>,
+    /// A program run: the plan is a Revolve Script program (see runtime/script.rs).
+    script_mode: bool,
+    scripts: Option<crate::script::host::ScriptHost>,
 }
 
 /// Run the executor for a run directory until it reaches a terminal or resting state.
@@ -97,7 +103,9 @@ pub fn drive(
     let _lock = OwnerLock::acquire(dir)?;
     let store = RunStore::open(dir)?;
     let world = SimWorld::open(&dir.join("world.db"))?;
-    let engine = ExecEngine::parse(&store.meta()?.engine).map_err(crate::util::Error::new)?;
+    let meta = store.meta()?;
+    let engine = ExecEngine::parse(&meta.engine).map_err(crate::util::Error::new)?;
+    let script_mode = meta.planner == "program";
     store.set_owner(Some(std::process::id()))?;
     let mut ex = Executor {
         store,
@@ -108,6 +116,8 @@ pub fn drive(
         opts,
         engine,
         programs: None,
+        script_mode,
+        scripts: None,
     };
     let started = Instant::now();
     let r = ex.run();
@@ -434,7 +444,12 @@ impl Executor {
                 continue;
             }
             let Some(plan) = active else {
-                match self.plan_episode()? {
+                let episode = if self.script_mode {
+                    self.activate_program()?
+                } else {
+                    self.plan_episode()?
+                };
+                match episode {
                     Episode::Planned | Episode::Restart => continue,
                     Episode::Rest(status, reason) => {
                         self.store.set_status(status, Some(&reason))?;
@@ -447,6 +462,28 @@ impl Executor {
                 }
             };
             let actions = self.store.plan_actions(plan.plan_seq)?;
+            if self.script_mode {
+                let (next, effect) = match self.run_script(&plan, &actions)? {
+                    ScriptOutcome::Finish => {
+                        match self.finalize(None, format!("program #{} finished", plan.plan_seq))? {
+                            Some(s) => {
+                                self.store.set_plan_status(plan.plan_seq, "finished")?;
+                                return Ok(s);
+                            }
+                            None => continue,
+                        }
+                    }
+                    ScriptOutcome::Step(n, e) => (n, e),
+                };
+                match next {
+                    Next::Continue | Next::Hold => {}
+                    Next::Replan(reason) | Next::Blocked(reason) => return self.block(&reason),
+                }
+                if effect && self.opts.step_delay_ms > 0 {
+                    std::thread::sleep(Duration::from_millis(self.opts.step_delay_ms));
+                }
+                continue;
+            }
             // A step that failed without a replan (e.g. a crash in between, or a
             // resumed block) means the plan no longer holds: replan from what is observed.
             if let Some(bad) = actions
@@ -561,7 +598,9 @@ impl Executor {
             }
         }
         // A failure established during reconciliation invalidates the rest of its plan.
+        // (A program handles refused moves itself: they return False.)
         if let Some(p) = self.active_plan()?
+            && !script::is_program(&p)
             && self
                 .store
                 .plan_actions(p.plan_seq)?
@@ -1116,7 +1155,7 @@ impl Executor {
                                 .collect();
                             self.store.materialize(Some(seq), "plan", rev, &steps)?;
                             if let Some(p) = &program {
-                                self.store.insert_program(seq, p)?;
+                                self.store.insert_program(seq, codegen::CODEGEN, p)?;
                                 self.program_event(seq, p)?;
                             }
                             self.store.set_active_plan(Some(seq))?;
@@ -1162,7 +1201,7 @@ impl Executor {
                 let steps: Vec<StepSrc> = actions.iter().map(StepSrc::from_row).collect();
                 match codegen::generate(&steps) {
                     Ok(p) => {
-                        self.store.insert_program(plan_seq, &p)?;
+                        self.store.insert_program(plan_seq, codegen::CODEGEN, &p)?;
                         self.program_event(plan_seq, &p)?;
                         p.wasm
                     }
@@ -1519,6 +1558,9 @@ impl Executor {
     /// Returns None when a correction, pause or cancel arrived meanwhile: the loop
     /// then handles it instead of finishing against a stale goal.
     fn finalize(&mut self, forced: Option<&str>, reason: String) -> Result<Option<String>> {
+        if self.script_mode {
+            return self.finalize_script(forced, reason);
+        }
         if let Some(r) = self.reconcile_all()? {
             return self.block(&r).map(Some);
         }
@@ -1574,6 +1616,9 @@ impl Executor {
     }
 
     fn finish_cancel(&mut self) -> Result<String> {
+        if self.script_mode {
+            return self.finish_cancel_script();
+        }
         let n = self.store.invalidate_pending(A_CANCELLED)?;
         // Leave no same-key retries attached to an active plan: they are reconciled below.
         if let Some(p) = self.active_plan()? {

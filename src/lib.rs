@@ -20,6 +20,7 @@ pub mod policy;
 pub mod program;
 pub mod runtime;
 pub mod scenario;
+pub mod script;
 pub mod server;
 pub mod sim;
 pub mod store;

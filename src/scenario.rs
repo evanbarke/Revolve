@@ -91,6 +91,9 @@ fn default_trays() -> u32 {
 #[serde(deny_unknown_fields)]
 pub struct WorldSetup {
     pub stock: KindCounts,
+    /// Parts in a mixed pile on the table (playground setups).
+    #[serde(default, skip_serializing_if = "KindCounts::is_empty")]
+    pub table: KindCounts,
     #[serde(default)]
     pub unknown_items: Vec<UnknownItem>,
     #[serde(default = "default_trays")]
@@ -203,14 +206,14 @@ pub fn resolve(name_or_path: &str, scenarios_dir: &Path) -> Result<PathBuf> {
     if p.extension().is_some_and(|e| e == "json") && p.exists() {
         return Ok(p);
     }
-    for sub in ["demo", "development", "held-out"] {
+    for sub in ["demo", "development", "held-out", "playground"] {
         let cand = scenarios_dir.join(sub).join(format!("{name_or_path}.json"));
         if cand.exists() {
             return Ok(cand);
         }
     }
     crate::bail!(
-        "scenario `{name_or_path}` not found (looked in {}/{{demo,development,held-out}}); run `revolve scenarios` to list them",
+        "scenario `{name_or_path}` not found (looked in {}/{{demo,development,held-out,playground}}); run `revolve scenarios` to list them",
         scenarios_dir.display()
     )
 }

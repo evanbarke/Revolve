@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 pub const KNOWN_KINDS: &[&str] = &["red_block", "blue_block", "green_block", "washer"];
 pub const UNKNOWN_KIND: &str = "unknown";
 pub const GRIPPER: &str = "gripper";
+/// A mixed pile that accepts any part (playground setups).
+pub const TABLE: &str = "table";
 
 pub fn is_known_kind(k: &str) -> bool {
     KNOWN_KINDS.contains(&k)
@@ -37,6 +39,8 @@ pub enum LocationType {
     Gripper,
     /// Outside the workspace (e.g. removed by an operator). Not reachable by capabilities.
     Outside,
+    /// A mixed pile that accepts any part.
+    Table,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

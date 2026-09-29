@@ -41,8 +41,8 @@ impl Default for Policy {
         .collect();
         Policy {
             grants,
-            pick_sources: vec!["bin-".into(), "tray-".into()],
-            place_destinations: vec!["bin-".into(), "tray-".into()],
+            pick_sources: vec!["bin-".into(), "tray-".into(), "table".into()],
+            place_destinations: vec!["bin-".into(), "tray-".into(), "table".into()],
             max_reserve_per_kind: 24,
             max_reserve_total: 64,
             // v1: one evidence object per consume/return record.

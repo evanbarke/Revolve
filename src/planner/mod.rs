@@ -194,6 +194,27 @@ pub enum AgentDecision {
     Finish(AgentReport),
 }
 
+/// The planner of a program run: programs are written and approved before they
+/// are submitted, so the executor never asks for a plan.
+pub struct NoPlanner;
+
+impl Planner for NoPlanner {
+    fn label(&self) -> String {
+        "program".into()
+    }
+    fn plan(
+        &mut self,
+        _req: &PlanningRequest,
+    ) -> (Result<PlannerResponse, PlannerError>, CallInfo) {
+        (
+            Err(PlannerError::NotConfigured {
+                message: "program runs do not use a planner; submit a program instead".into(),
+            }),
+            CallInfo::default(),
+        )
+    }
+}
+
 pub trait Planner {
     /// Label recorded in logs, UI and exports: `scripted`, `fixed-plan`, `live:<provider>/<model>`.
     fn label(&self) -> String;

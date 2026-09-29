@@ -1,0 +1,41 @@
+{
+  "id": "messy-table",
+  "family": "playground",
+  "description": "A messy table: 3 red, 2 blue and 2 green blocks, 3 washers and 1 item the camera can't identify. Bins and 4 trays are empty.",
+  "seed": 1,
+  "world": {
+    "stock": {
+      "red_block": 0,
+      "blue_block": 0,
+      "green_block": 0,
+      "washer": 0
+    },
+    "table": {
+      "red_block": 3,
+      "blue_block": 2,
+      "green_block": 2,
+      "washer": 3
+    },
+    "unknown_items": [
+      {
+        "bin": "table",
+        "true_kind": "scrap"
+      }
+    ],
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 1,
+    "kit_components": {
+      "red_block": 1
+    },
+    "source_text": "(playground: the request comes with the program)"
+  },
+  "faults": [],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 0,
+    "note": "playground: judged by the program's own expectations, checked by observation"
+  }
+}

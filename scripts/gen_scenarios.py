@@ -276,6 +276,29 @@ def main():
         s["seed"] = 5000 + i
         out["held-out"].append(s)
 
+    # --- playground: free-form tables for programs (not part of the benchmark).
+    # The request comes with the program; the goal below is a placeholder.
+    play_goal = goal(1, {"red_block": 1}, "(playground: the request comes with the program)")
+    empty = {"red_block": 0, "blue_block": 0, "green_block": 0, "washer": 0}
+    messy = {"red_block": 3, "blue_block": 2, "green_block": 2, "washer": 3}
+    scrap = [{"bin": "table", "true_kind": "scrap"}]
+
+    def play(sid, desc, stock, table, unknown=None, trays=4, faults=None):
+        world = {"stock": stock, "table": table, "unknown_items": unknown or [], "trays": trays}
+        return sc(sid, "playground", desc, world, play_goal, "completed", 0, faults=faults,
+                  note="playground: judged by the program's own expectations, checked by observation")
+
+    out["playground"] = [
+        play("messy-table", "A messy table: 3 red, 2 blue and 2 green blocks, 3 washers and 1 item the camera can't identify. Bins and 4 trays are empty.",
+             empty, messy, scrap),
+        play("workshop", "Bins stocked with 4 of each block and 6 washers, a small pile on the table, 4 empty trays.",
+             {"red_block": 4, "blue_block": 4, "green_block": 4, "washer": 6}, {"red_block": 1, "blue_block": 1, "washer": 2}),
+        play("messy-table-power-cut", "The messy table; the power fails right after the 4th part is placed.",
+             empty, messy, scrap, faults=[{"kind": "crash_after_effect", "on": trig("workspace.place", 4)}]),
+        play("messy-table-thief", "The messy table; someone takes a red block off the table after the 2nd part is placed.",
+             empty, messy, scrap, faults=[{"kind": "remove_object", "on": trig("workspace.place", 2), "object_id": "red-03"}]),
+    ]
+
     for sub, items in out.items():
         d = os.path.join(ROOT, sub)
         os.makedirs(d, exist_ok=True)

@@ -762,13 +762,112 @@ impl RunStore {
     }
 
     /// Record the compiled program of a plan (the first one recorded is kept).
-    pub fn insert_program(&self, plan_seq: i64, p: &crate::codegen::Program) -> Result<()> {
+    pub fn insert_program(
+        &self,
+        plan_seq: i64,
+        codegen: &str,
+        p: &crate::codegen::Program,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO programs(plan_seq, codegen, sha256, wasm, imports, created_at_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![plan_seq, crate::codegen::CODEGEN, p.sha256, p.wasm, serde_json::to_string(&p.imports)?, now_ms()],
+            params![plan_seq, codegen, p.sha256, p.wasm, serde_json::to_string(&p.imports)?, now_ms()],
         )?;
         Ok(())
+    }
+
+    /// Submit a Revolve Script program for this run, in one transaction. With
+    /// `replace`, the goal revision advances first, so a running program stops at
+    /// its next step (the claim checks the revision) and the new one takes over.
+    pub fn submit_program(
+        &mut self,
+        proposal: &Value,
+        author: &str,
+        reason: &str,
+        replace: bool,
+    ) -> Result<(u32, i64)> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (cur, status): (i64, String) = tx.query_row(
+            "SELECT current_goal_revision, status FROM run_state WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if is_terminal(&status) {
+            bail!("run already finished with status `{status}`; start a new run");
+        }
+        let rev = if replace {
+            let spec: String = tx.query_row(
+                "SELECT spec FROM goal_revisions WHERE revision = ?1",
+                params![cur],
+                |r| r.get(0),
+            )?;
+            let goal: GoalSpec = serde_json::from_str(&spec)?;
+            goal_revision_in_tx(&tx, &goal, author, reason)?
+        } else {
+            cur as u32
+        };
+        tx.execute(
+            "INSERT INTO plans(goal_revision, world_revision, status, proposal, planner, diagnostics, received_at_ms)
+             VALUES (?1, NULL, 'received', ?2, ?3, '[]', ?4)",
+            params![rev as i64, proposal.to_string(), author, now_ms()],
+        )?;
+        let seq = tx.last_insert_rowid();
+        event_in_tx(
+            &tx,
+            "program_submitted",
+            &format!("program #{seq} submitted by {author}: {reason}"),
+            None,
+            Some(json!({"plan_seq": seq, "goal_revision": rev})),
+        )?;
+        tx.commit()?;
+        Ok((rev, seq))
+    }
+
+    pub fn set_plan_diagnostics(
+        &self,
+        plan_seq: i64,
+        status: &str,
+        diagnostics: &Value,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE plans SET status = ?1, diagnostics = ?2 WHERE plan_seq = ?3",
+            params![status, diagnostics.to_string(), plan_seq],
+        )?;
+        Ok(())
+    }
+
+    /// Append one outside-world call of a program to its log (seq = call index).
+    pub fn append_call(
+        &mut self,
+        plan_seq: i64,
+        goal_revision: u32,
+        seq: usize,
+        step_id: &str,
+        capability: &str,
+        args: &Value,
+    ) -> Result<i64> {
+        let spec = json!({"step_id": step_id, "capability": capability, "capability_version": "1", "arguments": args});
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let n: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM actions WHERE plan_seq = ?1",
+            params![plan_seq],
+            |r| r.get(0),
+        )?;
+        if n as usize != seq {
+            bail!("program call #{seq} is out of order (the log has {n} calls)");
+        }
+        tx.execute(
+            "INSERT INTO actions(plan_seq, origin, step_id, seq, goal_revision, capability, capability_version, arguments, step_spec, status)
+             VALUES (?1, 'plan', ?2, ?3, ?4, ?5, '1', ?6, ?7, 'pending')",
+            params![plan_seq, step_id, seq as i64, goal_revision as i64, capability, args.to_string(), spec.to_string()],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok(id)
     }
 
     pub fn program(&self, plan_seq: i64) -> Result<Option<ProgramRow>> {
@@ -1453,9 +1552,9 @@ pub fn unconsumed_counts(
             Some(crate::model::LocationType::Bin) => {
                 o.location_id == crate::model::bin_for_kind(&k)
             }
-            Some(crate::model::LocationType::Tray) | Some(crate::model::LocationType::Gripper) => {
-                true
-            }
+            Some(crate::model::LocationType::Tray)
+            | Some(crate::model::LocationType::Gripper)
+            | Some(crate::model::LocationType::Table) => true,
             _ => false,
         };
         if in_place {

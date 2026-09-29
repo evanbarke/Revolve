@@ -166,6 +166,7 @@ fn loc_type_str(t: LocationType) -> &'static str {
         LocationType::Tray => "tray",
         LocationType::Gripper => "gripper",
         LocationType::Outside => "outside",
+        LocationType::Table => "table",
     }
 }
 
@@ -174,6 +175,7 @@ fn parse_loc_type(s: &str) -> LocationType {
         "bin" => LocationType::Bin,
         "tray" => LocationType::Tray,
         "gripper" => LocationType::Gripper,
+        "table" => LocationType::Table,
         _ => LocationType::Outside,
     }
 }
@@ -207,6 +209,15 @@ impl SimWorld {
         for t in 1..=sc.world.trays {
             locs.push((format!("tray-{t}"), LocationType::Tray, None));
         }
+        let has_table = !sc.world.table.is_empty()
+            || sc
+                .world
+                .unknown_items
+                .iter()
+                .any(|u| u.bin == crate::model::TABLE);
+        if has_table {
+            locs.push((crate::model::TABLE.into(), LocationType::Table, None));
+        }
         locs.push((OUTSIDE.into(), LocationType::Outside, None));
         for (id, t, acc) in &locs {
             tx.execute(
@@ -223,6 +234,20 @@ impl SimWorld {
                 tx.execute(
                     "INSERT INTO objects(object_id, true_kind, observed_kind, location_id) VALUES (?1, ?2, ?2, ?3)",
                     params![format!("{}-{:02}", prefix_for(kind), i), kind, bin_for_kind(kind)],
+                )?;
+                count += 1;
+            }
+        }
+        // Parts on the table are numbered after the stock of the same kind.
+        for (kind, n) in &sc.world.table {
+            if !KNOWN_KINDS.contains(&kind.as_str()) {
+                bail!("scenario table: unknown kind `{kind}`");
+            }
+            let start = sc.world.stock.get(kind).copied().unwrap_or(0);
+            for i in 1..=*n {
+                tx.execute(
+                    "INSERT INTO objects(object_id, true_kind, observed_kind, location_id) VALUES (?1, ?2, ?2, ?3)",
+                    params![format!("{}-{:02}", prefix_for(kind), start + i), kind, crate::model::TABLE],
                 )?;
                 count += 1;
             }
@@ -258,6 +283,18 @@ impl SimWorld {
         }
         tx.commit()?;
         Ok(SimWorld { conn })
+    }
+
+    /// Copy this world as a consistent snapshot for a rehearsal (a digital twin):
+    /// the same table, with no future faults, scripted human actions or blackouts.
+    pub fn snapshot_twin(&self, path: &Path) -> Result<()> {
+        self.conn
+            .execute("VACUUM INTO ?1", params![path.to_string_lossy()])?;
+        let c = Connection::open(path)?;
+        c.execute_batch(
+            "DELETE FROM faults; UPDATE world_meta SET blackout = 0, blackout_withhold = '[]', planner_offline = 0 WHERE id = 1;",
+        )?;
+        Ok(())
     }
 
     pub fn open(path: &Path) -> Result<SimWorld> {

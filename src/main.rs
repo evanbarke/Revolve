@@ -210,6 +210,11 @@ enum Cmd {
         #[arg(long, default_value_t = 400)]
         step_delay_ms: u64,
     },
+    /// Revolve Script programs: check, rehearse and run (see docs/language.md).
+    Script {
+        #[command(subcommand)]
+        cmd: ScriptCmd,
+    },
     /// Run the Revolve-vs-direct-tool benchmark.
     Benchmark {
         /// development | held-out | <directory>
@@ -232,6 +237,33 @@ enum Cmd {
         /// How Revolve runs plans: compiled (Wasm program, native code) | interpreted
         #[arg(long, default_value = "compiled")]
         engine: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScriptCmd {
+    /// Check and compile a program against a table, then rehearse it on a digital
+    /// twin. Nothing real moves.
+    Check {
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long, default_value = "messy-table")]
+        scenario: String,
+        /// Write the compiled WebAssembly here.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Run a program on a fresh copy of a scenario's table, through the durable
+    /// executor (restarts after simulated crashes).
+    Run {
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long, default_value = "messy-table")]
+        scenario: String,
+        #[arg(long, default_value_t = 0)]
+        step_delay_ms: u64,
+        #[arg(long)]
+        quiet: bool,
     },
 }
 
@@ -300,6 +332,165 @@ fn planner_choice(
         other => Err(Error::new(format!(
             "unknown planner `{other}` (scripted | configured)"
         ))),
+    }
+}
+
+fn print_script_diags(diags: &[revolve::script::Diag], source: &str) {
+    println!("NOT ACCEPTED: {} problem(s)", diags.len());
+    let lines: Vec<&str> = source.lines().collect();
+    for d in diags {
+        println!("  line {}: {}", d.line, d.message);
+        if let Some(l) = lines.get(d.line as usize - 1) {
+            println!("      | {}", l.trim_end());
+        }
+    }
+}
+
+fn script_cmd(cmd: ScriptCmd, sd: &Path, scen: &Path) -> Result<ExitCode> {
+    use revolve::script;
+    match cmd {
+        ScriptCmd::Check {
+            file,
+            scenario: name,
+            out,
+        } => {
+            let source = std::fs::read_to_string(&file)
+                .map_err(|e| Error::new(format!("reading {}: {e}", file.display())))?;
+            let sc = load_scenario(&name, scen)?;
+            // Check against a fresh copy of the scenario's table.
+            let tmp = sd.join("validate").join(revolve::util::fresh_id("s"));
+            std::fs::create_dir_all(&tmp)?;
+            let world = tmp.join("world.db");
+            let obs = {
+                let mut w = SimWorld::create(&world, &sc)?;
+                w.observe().map_err(Error::new)?
+            };
+            let env = script::CheckEnv::from(&obs, &revolve::policy::Policy::default());
+            let compiled = match script::compile(&source, &env) {
+                Ok(c) => c,
+                Err(d) => {
+                    print_script_diags(&d, &source);
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    return Ok(ExitCode::from(1));
+                }
+            };
+            println!(
+                "ACCEPTED: {} lines -> WebAssembly {} bytes (sha256 {}) -> native code",
+                compiled.lines,
+                compiled.wasm_bytes,
+                &compiled.sha256[..16]
+            );
+            println!("  can reach only: {}", compiled.imports.join(", "));
+            let f = &compiled.facts;
+            println!(
+                "  actions: {}",
+                f.effects.iter().cloned().collect::<Vec<_>>().join(", ")
+            );
+            println!(
+                "  puts parts only in: {}{}",
+                f.literal_destinations
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if f.dynamic_destinations {
+                    " (+ places chosen while running, each checked before the move)"
+                } else {
+                    ""
+                }
+            );
+            println!(
+                "  always finishes: no while loops, no recursion, loops over fixed lists ({} loop(s))",
+                f.loops
+            );
+            for q in &f.questions {
+                println!("  may ask you: {q}");
+            }
+            for e in &f.expectations {
+                println!("  success check: {e}");
+            }
+            if let Some(o) = out {
+                std::fs::write(&o, &compiled.wasm)?;
+                println!("  wrote {}", o.display());
+            }
+            let r = harness::rehearse(sd, &world, &sc.goal, &source)?;
+            let _ = std::fs::remove_dir_all(&tmp);
+            println!(
+                "\nrehearsal on a digital twin ({} ms): {} — {}",
+                r.duration_ms,
+                r.status,
+                r.reason.clone().unwrap_or_default()
+            );
+            println!("  {} move(s)", r.moves.len());
+            for q in &r.questions {
+                println!(
+                    "  asked: {} (assumed: {})",
+                    q["question"].as_str().unwrap_or(""),
+                    q["assumed"].as_str().unwrap_or("")
+                );
+            }
+            if let Some(rep) = &r.report {
+                for e in rep["expectations"].as_array().cloned().unwrap_or_default() {
+                    println!(
+                        "  {} {}",
+                        if e["held"] == json!(true) {
+                            "✓"
+                        } else {
+                            "✗"
+                        },
+                        e["description"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            Ok(if r.status == R_COMPLETED {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            })
+        }
+        ScriptCmd::Run {
+            file,
+            scenario: name,
+            step_delay_ms,
+            quiet,
+        } => {
+            let source = std::fs::read_to_string(&file)
+                .map_err(|e| Error::new(format!("reading {}: {e}", file.display())))?;
+            let sc = load_scenario(&name, scen)?;
+            let (run_id, dir) = harness::create_program_run(
+                sd,
+                &sc,
+                json!({"source": source, "file": file.display().to_string()}),
+                "human (cli)",
+                "interactive",
+            )?;
+            println!(
+                "run {run_id}  scenario {}  program {}",
+                sc.id,
+                file.display()
+            );
+            let log = harness::supervise(sd, &run_id, step_delay_ms, quiet)?;
+            print_status(&dir, false)?;
+            println!(
+                "supervisor: {} executor process(es), {} simulated crash(es)",
+                log.executor_processes, log.simulated_crashes
+            );
+            let st = RunStore::open(&dir)?.state()?;
+            if let Some(rep) = st.final_report {
+                for e in rep["expectations"].as_array().cloned().unwrap_or_default() {
+                    println!(
+                        "  {} {}",
+                        if e["held"] == json!(true) {
+                            "✓"
+                        } else {
+                            "✗"
+                        },
+                        e["description"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 
@@ -641,6 +832,7 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             server::serve(&bind, sd, &cli.scenarios_dir, step_delay_ms)?;
             Ok(ExitCode::SUCCESS)
         }
+        Cmd::Script { cmd } => script_cmd(cmd, sd, &cli.scenarios_dir),
         Cmd::Benchmark {
             suite,
             planner,

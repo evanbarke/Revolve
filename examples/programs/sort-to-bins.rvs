@@ -1,0 +1,16 @@
+# Put every part on the table back in its bin; anything unidentified goes to tray 4.
+BINS = ["bin-red", "bin-blue", "bin-green", "bin-washer"]
+KINDS = ["red_block", "blue_block", "green_block", "washer"]
+
+def home(part):
+    for i in range(len(KINDS)):
+        if part.kind == KINDS[i]:
+            return BINS[i]
+    return "tray-4"
+
+for p in parts(at="table"):
+    if not move(p, home(p)):
+        say("Could not move", p.id)
+
+expect count("table") == 0, "the table is clear"
+expect count("tray-4") == len(parts(kind="unknown")), "every unidentified part is in tray 4"

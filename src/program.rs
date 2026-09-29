@@ -258,7 +258,7 @@ pub struct ProgramHost {
     modules: HashMap<String, Module>,
 }
 
-fn engine() -> Result<Engine, String> {
+pub(crate) fn engine() -> Result<Engine, String> {
     let mut config = Config::new();
     config.consume_fuel(true);
     Engine::new(&config).map_err(|e| format!("wasm engine: {e}"))
