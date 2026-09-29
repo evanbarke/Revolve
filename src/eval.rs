@@ -10,6 +10,7 @@ use crate::model::{
     GRIPPER, KNOWN_KINDS, KindCounts, LocationType, UNKNOWN_KIND, match_complete_kits,
 };
 use crate::policy::Policy;
+use crate::program::ExecEngine;
 use crate::scenario::{self, Scenario};
 use crate::sim::SimWorld;
 use crate::store::*;
@@ -26,6 +27,8 @@ pub struct Verdict {
     pub family: String,
     pub arm: String,
     pub planner: String,
+    /// "compiled", "interpreted" (Revolve) or "direct" (baseline).
+    pub engine: String,
     pub trial: u32,
     pub terminal_status: String,
     pub expected_outcome: String,
@@ -77,6 +80,7 @@ pub fn evaluate_run(dir: &Path) -> Result<Verdict> {
         family: sc.family.clone(),
         arm: meta.arm.clone(),
         planner: meta.planner.clone(),
+        engine: meta.engine.clone(),
         terminal_status: st.status.clone(),
         expected_outcome: sc.expect.outcome.clone(),
         expected_kits: sc.expect.kits_complete,
@@ -462,6 +466,7 @@ pub fn run_benchmark(
     arms: &[Arm],
     trials: u32,
     out: &Path,
+    engine: ExecEngine,
 ) -> Result<String> {
     let files = scenario::list_dir(suite_dir);
     if files.is_empty() {
@@ -477,7 +482,7 @@ pub fn run_benchmark(
             for trial in 1..=trials {
                 let res = (|| -> Result<Verdict> {
                     let (run_id, dir) =
-                        harness::create_run(state_dir, &sc, *arm, choice, "scripted")?;
+                        harness::create_run_with(state_dir, &sc, *arm, choice, "scripted", engine)?;
                     let log = harness::supervise(state_dir, &run_id, 0, true)?;
                     let mut v = evaluate_run(&dir)?;
                     v.trial = trial;
@@ -522,11 +527,11 @@ pub fn run_benchmark(
         serde_json::to_string_pretty(&incomplete)?,
     )?;
     let mut csv = String::from(
-        "scenario_id,family,arm,planner,trial,terminal_status,expected_outcome,expected_kits,kits_truly_complete,kits_claimed_complete,false_success_claims,inventory_correct,invariant_violations,duplicate_effects,duplicate_attempts_refused,unauthorized_attempted,unauthorized_executed,success,fault_fired,recovery_ms,human_interventions,planner_requests,input_tokens,output_tokens,dispatches,observations,wall_ms,peak_rss_bytes,executor_processes,simulated_crashes\n",
+        "scenario_id,family,arm,planner,trial,terminal_status,expected_outcome,expected_kits,kits_truly_complete,kits_claimed_complete,false_success_claims,inventory_correct,invariant_violations,duplicate_effects,duplicate_attempts_refused,unauthorized_attempted,unauthorized_executed,success,fault_fired,recovery_ms,human_interventions,planner_requests,input_tokens,output_tokens,dispatches,observations,wall_ms,peak_rss_bytes,executor_processes,simulated_crashes,engine\n",
     );
     for v in &verdicts {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             v.scenario_id, v.family, v.arm, v.planner, v.trial, v.terminal_status, v.expected_outcome, v.expected_kits,
             v.kits_truly_complete.len(), v.kits_claimed_complete.len(), v.false_success_claims, v.inventory_correct,
             v.invariant_violations.len(), v.duplicate_effects, v.duplicate_attempts_refused, v.unauthorized_attempted, v.unauthorized_executed, v.success,
@@ -534,7 +539,7 @@ pub fn run_benchmark(
             v.human_interventions.values().sum::<u32>(), v.planner_requests,
             v.input_tokens.map(|x| x.to_string()).unwrap_or_default(), v.output_tokens.map(|x| x.to_string()).unwrap_or_default(),
             v.dispatches, v.observations, v.wall_ms, v.peak_rss_bytes.map(|x| x.to_string()).unwrap_or_default(),
-            v.executor_processes, v.simulated_crashes
+            v.executor_processes, v.simulated_crashes, v.engine
         ));
     }
     std::fs::write(out.join("results.csv"), csv)?;
@@ -549,6 +554,7 @@ pub fn run_benchmark(
         "arms": arms.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
         "trials_per_scenario_arm": trials,
         "planner": planner_label,
+        "revolve_engine": engine.as_str(),
         "live_model_calls_performed": planner_label.starts_with("live:"),
         "started_at_ms": started,
         "finished_at_ms": now_ms(),
@@ -643,11 +649,12 @@ fn markdown_report(meta: &Value, summary: &Value, vs: &[Verdict], incomplete: &[
         .unwrap_or(false);
     s.push_str("# Revolve benchmark results\n\n");
     s.push_str(&format!(
-        "- Suite: `{}` ({} scenario files), trials per scenario/arm: {}\n- Planner: `{}`\n- Completed trials: {}; incomplete (excluded, listed below): {}\n- Host: {} / {}\n\n",
+        "- Suite: `{}` ({} scenario files), trials per scenario/arm: {}\n- Planner: `{}`\n- Revolve engine: `{}` (baseline: direct tool calls)\n- Completed trials: {}; incomplete (excluded, listed below): {}\n- Host: {} / {}\n\n",
         meta["suite"].as_str().unwrap_or(""),
         meta["scenarios"],
         meta["trials_per_scenario_arm"],
         meta["planner"].as_str().unwrap_or(""),
+        meta["revolve_engine"].as_str().unwrap_or("interpreted"),
         meta["completed_trials"],
         meta["incomplete_trials"],
         meta["host"]["os"].as_str().unwrap_or(""),

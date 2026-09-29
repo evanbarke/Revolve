@@ -85,6 +85,29 @@ the provider's tool-use interface: each capability is a tool with a strict
 schema, invalid decisions are fed back into history (as compiler diagnostics
 are for the planner). With that, 39/39 decisions were valid on `nominal`.
 
+**D16 — Plans compile to WebAssembly; the program asks, the runtime acts.**
+The owner's goal is an actual code compiler (`docs/vision.md`). Checked plans
+are lowered with `wasm-encoder` to a Wasm module that wasmtime compiles to native
+code with Cranelift. Wasm was chosen over emitting Rust or LLVM IR because:
+- it is sandboxed by default;
+- it is portable between x86_64 and the Jetson's aarch64;
+- an import list gives least authority structurally;
+- compilation takes milliseconds in-process, with no toolchain on the device.
+
+The program performs no effects. It stops at the first undone step and the
+executor dispatches that step through the unchanged path. Recovery is replay
+from the first step. This keeps every invariant in one place and made the
+engines provably equivalent on all 62 scenarios.
+
+Translation validation (checking each request against the plan) guards codegen
+bugs until the language grows constructs the plan cannot express. The engine
+is recorded per run: old runs read as `interpreted` and the baseline as `direct`.
+
+A related change applies to both engines: an active plan that contains a failed
+or denied step is replanned instead of continued. Before, a crash between
+recording a failure and replacing the plan left a hole that the interpreter
+skipped. No benchmark result changed.
+
 **D13 — Restricted grammar, not NLU, in scripted mode.** `parse-request` and
 the UI accept only the kit family's phrasing and refuse anything else rather
 than guessing.

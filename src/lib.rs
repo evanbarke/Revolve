@@ -7,6 +7,7 @@
 pub mod baseline;
 pub mod bookkeeping;
 pub mod capability;
+pub mod codegen;
 pub mod compiler;
 pub mod eval;
 pub mod gateway;
@@ -16,6 +17,7 @@ pub mod ir;
 pub mod model;
 pub mod planner;
 pub mod policy;
+pub mod program;
 pub mod runtime;
 pub mod scenario;
 pub mod server;

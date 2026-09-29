@@ -13,6 +13,7 @@
 
 use crate::bookkeeping::{self, is_hold};
 use crate::capability::{self, Completion, EffectClass};
+use crate::codegen::{self, StepSrc};
 use crate::compiler::{self, CompileContext, DiagCategory, Diagnostic, Limits};
 use crate::gateway::{DispatchOutcome, Gateway, HumanHook};
 use crate::inventory;
@@ -23,6 +24,7 @@ use crate::planner::{
     capability_descriptions,
 };
 use crate::policy::Policy;
+use crate::program::{ExecEngine, NextStep, ProgramHost};
 use crate::sim::{AdapterOutcome, SimWorld, StatusResult};
 use crate::store::*;
 use crate::util::Result;
@@ -44,6 +46,15 @@ enum Next {
     Blocked(String),
     /// A control request (pause/cancel) prevented the claim.
     Hold,
+}
+
+/// The step the active plan wants next (from the interpreter or the program).
+enum Chosen {
+    Done,
+    Run(Box<ActionRow>, Value),
+    /// The step cannot run (an input is not available): fail it, replan.
+    Fail(i64, String),
+    Block(String),
 }
 
 enum Recon {
@@ -72,6 +83,8 @@ pub struct Executor {
     planner: Box<dyn Planner>,
     hook: Option<Box<dyn HumanHook>>,
     opts: ExecOptions,
+    engine: ExecEngine,
+    programs: Option<ProgramHost>,
 }
 
 /// Run the executor for a run directory until it reaches a terminal or resting state.
@@ -84,6 +97,7 @@ pub fn drive(
     let _lock = OwnerLock::acquire(dir)?;
     let store = RunStore::open(dir)?;
     let world = SimWorld::open(&dir.join("world.db"))?;
+    let engine = ExecEngine::parse(&store.meta()?.engine).map_err(crate::util::Error::new)?;
     store.set_owner(Some(std::process::id()))?;
     let mut ex = Executor {
         store,
@@ -92,6 +106,8 @@ pub fn drive(
         planner,
         hook,
         opts,
+        engine,
+        programs: None,
     };
     let started = Instant::now();
     let r = ex.run();
@@ -182,6 +198,57 @@ fn holds_in(obs: &Observation, classes: &[Classification], c: &Condition, rev: u
 /// Effect conditions that can be verified by observation: the contract's implied
 /// postconditions plus the step's declared ones, excluding non-physical conditions
 /// (a goal revision is not an effect and must never decide whether an effect happened).
+fn is_pending(a: &ActionRow) -> bool {
+    a.status == A_PENDING || a.status == A_RETRY_PENDING
+}
+
+/// The value of `output` produced by an earlier step, if it is available.
+pub(crate) fn step_output(src: &ActionRow, output: &str) -> Option<Value> {
+    match src.status.as_str() {
+        A_SUCCEEDED => src
+            .result
+            .as_ref()
+            .and_then(|r| r.get(output))
+            .cloned()
+            .or_else(|| {
+                src.resolved_arguments
+                    .as_ref()
+                    .and_then(|r| r.get(output))
+                    .cloned()
+            }),
+        A_SATISFIED => src.arguments.get(output).cloned(),
+        _ => None,
+    }
+}
+
+/// Resolve a step's arguments against its plan (literals and earlier outputs).
+pub(crate) fn resolve_args(
+    a: &ActionRow,
+    plan_actions: &[ActionRow],
+) -> std::result::Result<Value, String> {
+    let mut out = serde_json::Map::new();
+    let args = a.arguments.as_object().cloned().unwrap_or_default();
+    for (k, v) in args {
+        match ArgValue::parse(&v) {
+            Ok(ArgValue::Ref { step_id, output }) => {
+                let src = plan_actions
+                    .iter()
+                    .find(|x| x.step_id == step_id)
+                    .ok_or(format!("reference to unknown step {step_id}"))?;
+                let val = step_output(src, &output).ok_or(format!(
+                    "output {step_id}.{output} is not available (step status {})",
+                    src.status
+                ))?;
+                out.insert(k, val);
+            }
+            _ => {
+                out.insert(k, v);
+            }
+        }
+    }
+    Ok(Value::Object(out))
+}
+
 fn effect_conditions(capability: &str, args: &Value, step: Option<&Step>) -> Vec<Condition> {
     let s = |k: &str| {
         args.get(k)
@@ -380,20 +447,50 @@ impl Executor {
                 }
             };
             let actions = self.store.plan_actions(plan.plan_seq)?;
-            let Some(next) = actions
+            // A step that failed without a replan (e.g. a crash in between, or a
+            // resumed block) means the plan no longer holds: replan from what is observed.
+            if let Some(bad) = actions
                 .iter()
-                .find(|a| a.status == A_PENDING || a.status == A_RETRY_PENDING)
-                .cloned()
-            else {
-                match self.finalize(None, format!("plan #{} finished", plan.plan_seq))? {
-                    Some(s) => {
-                        self.store.set_plan_status(plan.plan_seq, "finished")?;
-                        return Ok(s);
-                    }
-                    None => continue,
-                }
+                .find(|a| a.status == A_FAILED || a.status == A_DENIED)
+            {
+                self.supersede_plan(
+                    plan.plan_seq,
+                    &format!(
+                        "step {} of plan #{} did not succeed ({}); replanning from the observed state",
+                        bad.step_id, plan.plan_seq, bad.status
+                    ),
+                )?;
+                continue;
+            }
+            let chosen = match self.engine {
+                ExecEngine::Interpreted => match actions.iter().find(|a| is_pending(a)) {
+                    None => Chosen::Done,
+                    Some(n) => match resolve_args(n, &actions) {
+                        Ok(args) => Chosen::Run(Box::new(n.clone()), args),
+                        Err(e) => Chosen::Fail(n.action_id, e),
+                    },
+                },
+                ExecEngine::Compiled => self.run_program(plan.plan_seq, &actions)?,
             };
-            match self.execute(&next, &actions)? {
+            let next = match chosen {
+                Chosen::Done => {
+                    match self.finalize(None, format!("plan #{} finished", plan.plan_seq))? {
+                        Some(s) => {
+                            self.store.set_plan_status(plan.plan_seq, "finished")?;
+                            return Ok(s);
+                        }
+                        None => continue,
+                    }
+                }
+                Chosen::Run(row, args) => self.execute(&row, args)?,
+                Chosen::Fail(action_id, e) => {
+                    self.store
+                        .set_action_status(action_id, A_FAILED, None, Some(&e))?;
+                    Next::Replan(e)
+                }
+                Chosen::Block(reason) => Next::Blocked(reason),
+            };
+            match next {
                 Next::Continue => {}
                 Next::Hold => continue,
                 Next::Replan(reason) => self.supersede_plan(plan.plan_seq, &reason)?,
@@ -961,6 +1058,39 @@ impl Executor {
                             feedback = diags;
                         }
                         Ok(cp) => {
+                            // Compiled runs: lower the checked plan to a program first; a
+                            // plan that cannot be lowered is rejected like any other.
+                            let program = match self.engine {
+                                ExecEngine::Interpreted => None,
+                                ExecEngine::Compiled => {
+                                    let steps: Vec<StepSrc> =
+                                        cp.steps.iter().map(StepSrc::from_step).collect();
+                                    match codegen::generate(&steps) {
+                                        Ok(p) => Some(p),
+                                        Err(e) => {
+                                            let d = compiler::structure_diagnostic(format!(
+                                                "code generation: {e}"
+                                            ));
+                                            self.store.insert_plan(
+                                                rev,
+                                                Some(obs.world_revision),
+                                                &raw,
+                                                &self.planner.label(),
+                                                "rejected",
+                                                &serde_json::to_value([&d])?,
+                                            )?;
+                                            self.event(
+                                                "plan_rejected",
+                                                &format!("plan rejected before any effect: {d}"),
+                                                None,
+                                                None,
+                                            )?;
+                                            feedback = vec![d];
+                                            continue;
+                                        }
+                                    }
+                                }
+                            };
                             let seq = self.store.insert_plan(
                                 rev,
                                 Some(obs.world_revision),
@@ -985,6 +1115,10 @@ impl Executor {
                                 })
                                 .collect();
                             self.store.materialize(Some(seq), "plan", rev, &steps)?;
+                            if let Some(p) = &program {
+                                self.store.insert_program(seq, p)?;
+                                self.program_event(seq, p)?;
+                            }
                             self.store.set_active_plan(Some(seq))?;
                             self.event(
                                 "plan_accepted",
@@ -1014,64 +1148,87 @@ impl Executor {
 
     // ------------------------------------------------------------------ execution
 
-    fn resolve_args(
-        &self,
-        a: &ActionRow,
-        plan_actions: &[ActionRow],
-    ) -> std::result::Result<Value, String> {
-        let mut out = serde_json::Map::new();
-        let args = a.arguments.as_object().cloned().unwrap_or_default();
-        for (k, v) in args {
-            match ArgValue::parse(&v) {
-                Ok(ArgValue::Ref { step_id, output }) => {
-                    let src = plan_actions
-                        .iter()
-                        .find(|x| x.step_id == step_id)
-                        .ok_or(format!("reference to unknown step {step_id}"))?;
-                    let val = match src.status.as_str() {
-                        A_SUCCEEDED => src
-                            .result
-                            .as_ref()
-                            .and_then(|r| r.get(&output))
-                            .cloned()
-                            .or_else(|| {
-                                src.resolved_arguments
-                                    .as_ref()
-                                    .and_then(|r| r.get(&output))
-                                    .cloned()
-                            }),
-                        A_SATISFIED => src.arguments.get(&output).cloned(),
-                        _ => None,
-                    };
-                    out.insert(
-                        k,
-                        val.ok_or(format!(
-                            "output {step_id}.{output} is not available (step status {})",
-                            src.status
-                        ))?,
-                    );
-                }
-                _ => {
-                    out.insert(k, v);
+    /// Run the active plan's compiled program up to the next step it asks for.
+    fn run_program(&mut self, plan_seq: i64, actions: &[ActionRow]) -> Result<Chosen> {
+        let wasm = match self.store.program(plan_seq)? {
+            Some(p) if crate::util::sha256_hex(&p.wasm) == p.sha256 => p.wasm,
+            Some(_) => {
+                return Ok(Chosen::Block(format!(
+                    "the stored program of plan #{plan_seq} fails its integrity check; not running it"
+                )));
+            }
+            None => {
+                // A plan accepted before its program was stored: lower its recorded steps.
+                let steps: Vec<StepSrc> = actions.iter().map(StepSrc::from_row).collect();
+                match codegen::generate(&steps) {
+                    Ok(p) => {
+                        self.store.insert_program(plan_seq, &p)?;
+                        self.program_event(plan_seq, &p)?;
+                        p.wasm
+                    }
+                    Err(e) => {
+                        return Ok(Chosen::Block(format!(
+                            "plan #{plan_seq} could not be compiled to a program: {e}"
+                        )));
+                    }
                 }
             }
+        };
+        if self.programs.is_none() {
+            self.programs =
+                Some(ProgramHost::new(&self.policy.grants).map_err(crate::util::Error::new)?);
         }
-        Ok(Value::Object(out))
+        let host = self.programs.as_mut().expect("program host");
+        Ok(match host.next(&wasm, actions) {
+            NextStep::Done => Chosen::Done,
+            NextStep::Execute { action_id, args } => {
+                match actions.iter().find(|a| a.action_id == action_id) {
+                    Some(row) => Chosen::Run(Box::new(row.clone()), args),
+                    None => {
+                        Chosen::Block(format!("the program asked for unknown action {action_id}"))
+                    }
+                }
+            }
+            NextStep::Fail { action_id, reason } => Chosen::Fail(action_id, reason),
+            NextStep::Diverged(r) => {
+                self.event(
+                    "program_diverged",
+                    &format!("plan #{plan_seq}: the compiled program diverged from the checked plan ({r}); nothing was dispatched"),
+                    None,
+                    None,
+                )?;
+                Chosen::Block(format!(
+                    "the compiled program diverged from the checked plan: {r}; nothing was dispatched"
+                ))
+            }
+            NextStep::Trapped(r) => Chosen::Block(format!(
+                "the compiled program stopped abnormally ({r}); nothing was dispatched"
+            )),
+            NextStep::Refused(r) => Chosen::Block(format!(
+                "the compiled program was refused before running: {r}"
+            )),
+        })
     }
 
-    fn execute(&mut self, a: &ActionRow, plan_actions: &[ActionRow]) -> Result<Next> {
+    fn program_event(&self, plan_seq: i64, p: &codegen::Program) -> Result<()> {
+        self.event(
+            "program_built",
+            &format!(
+                "plan #{plan_seq} compiled to a WebAssembly program ({} bytes, sha256 {}), native code via Cranelift; imports only: {}",
+                p.wasm.len(),
+                &p.sha256[..12],
+                p.imports.join(", ")
+            ),
+            None,
+            Some(json!({"sha256": p.sha256, "bytes": p.wasm.len(), "imports": p.imports, "codegen": codegen::CODEGEN})),
+        )
+    }
+
+    fn execute(&mut self, a: &ActionRow, args: Value) -> Result<Next> {
         let contract = capability::lookup(&a.capability).ok_or_else(|| {
             crate::util::Error::new(format!("unknown capability {}", a.capability))
         })?;
         let step: Step = serde_json::from_value(a.step_spec.clone())?;
-        let args = match self.resolve_args(a, plan_actions) {
-            Ok(v) => v,
-            Err(e) => {
-                self.store
-                    .set_action_status(a.action_id, A_FAILED, None, Some(&e))?;
-                return Ok(Next::Replan(e));
-            }
-        };
         let rev = self.store.state()?.goal_revision;
         // Fresh observation for precondition checks (unless this is a same-key retry).
         if !step.preconditions.is_empty() && a.status == A_PENDING {

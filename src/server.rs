@@ -296,7 +296,9 @@ fn create(ctx: &Ctx, body: &str) -> Result<Value> {
         }
         other => crate::bail!("unknown planner `{other}`"),
     };
-    let (run_id, _) = harness::create_run(&ctx.state_dir, &sc, arm, &choice, human)?;
+    let engine = crate::program::ExecEngine::parse(v["engine"].as_str().unwrap_or("compiled"))
+        .map_err(Error::new)?;
+    let (run_id, _) = harness::create_run_with(&ctx.state_dir, &sc, arm, &choice, human, engine)?;
     Ok(json!({"run_id": run_id}))
 }
 

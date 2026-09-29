@@ -2,12 +2,13 @@ use clap::{Parser, Subcommand};
 use revolve::harness::{self, Arm, PlannerChoice};
 use revolve::model::parse_restricted_request;
 use revolve::planner::live::{BudgetLedger, LiveConfig};
+use revolve::program::ExecEngine;
 use revolve::runtime::ExecOptions;
 use revolve::scenario::{self, Scenario};
 use revolve::sim::SimWorld;
 use revolve::store::*;
 use revolve::util::{Error, Result};
-use revolve::{capability, compiler, eval, inventory, server};
+use revolve::{capability, codegen, compiler, eval, inventory, program, server};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -74,6 +75,9 @@ enum Cmd {
         step_delay_ms: u64,
         #[arg(long)]
         quiet: bool,
+        /// How Revolve runs plans: compiled (Wasm program, native code) | interpreted
+        #[arg(long, default_value = "compiled")]
+        engine: String,
     },
     /// Create a run without executing it (for the UI or manual CLI control). Prints the run id.
     New {
@@ -92,6 +96,9 @@ enum Cmd {
         /// Let the harness play the human (answers, scenario corrections).
         #[arg(long)]
         scripted_human: bool,
+        /// How Revolve runs plans: compiled (Wasm program, native code) | interpreted
+        #[arg(long, default_value = "compiled")]
+        engine: String,
     },
     /// Execute a handwritten Action IR plan on a fresh scenario (fixed-plan mode).
     Run {
@@ -101,6 +108,9 @@ enum Cmd {
         plan: PathBuf,
         #[arg(long, default_value_t = 0)]
         step_delay_ms: u64,
+        /// How Revolve runs plans: compiled (Wasm program, native code) | interpreted
+        #[arg(long, default_value = "compiled")]
+        engine: String,
     },
     /// Resume (or start) the executor for an existing run in this process.
     Resume {
@@ -179,6 +189,20 @@ enum Cmd {
         #[arg(long, default_value = "nominal")]
         scenario: String,
     },
+    /// Check a plan against a scenario and compile it to a WebAssembly program
+    /// (optionally also to native code for this machine). Nothing is executed.
+    Build {
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long, default_value = "nominal")]
+        scenario: String,
+        /// Where to write the .wasm program.
+        #[arg(long)]
+        out: PathBuf,
+        /// Also write the ahead-of-time native code (.cwasm) for this machine.
+        #[arg(long)]
+        native: Option<PathBuf>,
+    },
     /// Serve the browser UI (loopback only).
     Serve {
         #[arg(long, default_value = "127.0.0.1:8080")]
@@ -205,6 +229,9 @@ enum Cmd {
         /// revolve,baseline (default both)
         #[arg(long, default_value = "revolve,baseline")]
         arms: String,
+        /// How Revolve runs plans: compiled (Wasm program, native code) | interpreted
+        #[arg(long, default_value = "compiled")]
+        engine: String,
     },
 }
 
@@ -339,14 +366,21 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             budget,
             step_delay_ms,
             quiet,
+            engine,
         } => {
             let sc = load_scenario(&name, &cli.scenarios_dir)?;
             let choice = planner_choice(&planner, None, &planner_config, budget, sd)?;
+            let engine = ExecEngine::parse(&engine).map_err(Error::new)?;
             let (run_id, dir) =
-                harness::create_run(sd, &sc, Arm::parse(&arm)?, &choice, "scripted")?;
+                harness::create_run_with(sd, &sc, Arm::parse(&arm)?, &choice, "scripted", engine)?;
             println!(
-                "run {run_id}  scenario {}  arm {arm}  planner {planner}",
-                sc.id
+                "run {run_id}  scenario {}  arm {arm}  planner {planner}  engine {}",
+                sc.id,
+                if arm == "baseline" {
+                    "direct"
+                } else {
+                    engine.as_str()
+                }
             );
             println!("state: {}", dir.display());
             let log = harness::supervise(sd, &run_id, step_delay_ms, quiet)?;
@@ -370,10 +404,11 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             planner_config,
             budget,
             scripted_human,
+            engine,
         } => {
             let sc = load_scenario(&name, &cli.scenarios_dir)?;
             let choice = planner_choice(&planner, plan.as_ref(), &planner_config, budget, sd)?;
-            let (run_id, _dir) = harness::create_run(
+            let (run_id, _dir) = harness::create_run_with(
                 sd,
                 &sc,
                 Arm::parse(&arm)?,
@@ -383,6 +418,7 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
                 } else {
                     "interactive"
                 },
+                ExecEngine::parse(&engine).map_err(Error::new)?,
             )?;
             println!("{run_id}");
             Ok(ExitCode::SUCCESS)
@@ -391,16 +427,23 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             scenario: name,
             plan,
             step_delay_ms,
+            engine,
         } => {
             let sc = load_scenario(&name, &cli.scenarios_dir)?;
-            let (run_id, dir) = harness::create_run(
+            let engine = ExecEngine::parse(&engine).map_err(Error::new)?;
+            let (run_id, dir) = harness::create_run_with(
                 sd,
                 &sc,
                 Arm::Revolve,
                 &PlannerChoice::Fixed(plan),
                 "scripted",
+                engine,
             )?;
-            println!("run {run_id}  scenario {}  planner fixed-plan", sc.id);
+            println!(
+                "run {run_id}  scenario {}  planner fixed-plan  engine {}",
+                sc.id,
+                engine.as_str()
+            );
             let log = harness::supervise(sd, &run_id, step_delay_ms, false)?;
             print_status(&dir, false)?;
             println!(
@@ -578,6 +621,19 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             plan,
             scenario: name,
         } => validate(&plan, &name, &cli.scenarios_dir, sd),
+        Cmd::Build {
+            plan,
+            scenario: name,
+            out,
+            native,
+        } => build(
+            &plan,
+            &name,
+            &cli.scenarios_dir,
+            sd,
+            &out,
+            native.as_deref(),
+        ),
         Cmd::Serve {
             bind,
             step_delay_ms,
@@ -593,7 +649,9 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             trials,
             out,
             arms,
+            engine,
         } => {
+            let engine = ExecEngine::parse(&engine).map_err(Error::new)?;
             let dir = match suite.as_str() {
                 "development" | "held-out" | "demo" => cli.scenarios_dir.join(&suite),
                 other => PathBuf::from(other),
@@ -610,7 +668,7 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
                     revolve::util::now_ms()
                 ))
             });
-            let summary = eval::run_benchmark(sd, &dir, &choice, &arms, trials, &out)?;
+            let summary = eval::run_benchmark(sd, &dir, &choice, &arms, trials, &out, engine)?;
             println!("{summary}");
             println!("results written to {}", out.display());
             Ok(ExitCode::SUCCESS)
@@ -677,7 +735,14 @@ fn doctor(sd: &Path, scen: &Path) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn validate(plan: &Path, name: &str, scen: &Path, sd: &Path) -> Result<ExitCode> {
+/// Read a plan file and check it against a scenario's initial state (throwaway
+/// world copy). `Ok(None)` means the file is not JSON (already reported).
+fn check_plan(
+    plan: &Path,
+    name: &str,
+    scen: &Path,
+    sd: &Path,
+) -> Result<Option<std::result::Result<compiler::CompiledPlan, Vec<compiler::Diagnostic>>>> {
     let sc = load_scenario(name, scen)?;
     let text = std::fs::read_to_string(plan)
         .map_err(|e| Error::new(format!("reading {}: {e}", plan.display())))?;
@@ -685,10 +750,9 @@ fn validate(plan: &Path, name: &str, scen: &Path, sd: &Path) -> Result<ExitCode>
         Ok(v) => v,
         Err(e) => {
             println!("INVALID [Syntax] not JSON: {e}");
-            return Ok(ExitCode::from(1));
+            return Ok(None);
         }
     };
-    // Compile against a throwaway copy of the scenario's initial world.
     let tmp = sd.join("validate").join(revolve::util::fresh_id("v"));
     std::fs::create_dir_all(&tmp)?;
     let result =
@@ -720,7 +784,73 @@ fn validate(plan: &Path, name: &str, scen: &Path, sd: &Path) -> Result<ExitCode>
             }))
         })();
     let _ = std::fs::remove_dir_all(&tmp);
-    match result? {
+    Ok(Some(result?))
+}
+
+fn print_diagnostics(diags: &[compiler::Diagnostic]) {
+    println!("INVALID: {} diagnostic(s)", diags.len());
+    for d in diags {
+        println!(
+            "  [{:?}] {}{}: {}",
+            d.category,
+            d.step_id
+                .as_deref()
+                .map(|s| format!("step `{s}` "))
+                .unwrap_or_default(),
+            d.path,
+            d.message
+        );
+    }
+}
+
+fn build(
+    plan: &Path,
+    name: &str,
+    scen: &Path,
+    sd: &Path,
+    out: &Path,
+    native: Option<&Path>,
+) -> Result<ExitCode> {
+    let cp = match check_plan(plan, name, scen, sd)? {
+        None => return Ok(ExitCode::from(1)),
+        Some(Err(diags)) => {
+            print_diagnostics(&diags);
+            return Ok(ExitCode::from(1));
+        }
+        Some(Ok(cp)) => cp,
+    };
+    let steps: Vec<codegen::StepSrc> = cp.steps.iter().map(codegen::StepSrc::from_step).collect();
+    let prog = codegen::generate(&steps).map_err(Error::new)?;
+    std::fs::write(out, &prog.wasm)?;
+    println!(
+        "checked: {} step(s); program {} ({} bytes, {}, sha256 {})",
+        cp.steps.len(),
+        out.display(),
+        prog.wasm.len(),
+        codegen::CODEGEN,
+        prog.sha256
+    );
+    println!("imports only: {}", prog.imports.join(", "));
+    if let Some(n) = native {
+        let code = program::precompile(&prog.wasm).map_err(Error::new)?;
+        std::fs::write(n, &code)?;
+        println!(
+            "native code for {}-{} (Cranelift, wasmtime 47): {} ({} bytes)",
+            std::env::consts::ARCH,
+            std::env::consts::OS,
+            n.display(),
+            code.len()
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn validate(plan: &Path, name: &str, scen: &Path, sd: &Path) -> Result<ExitCode> {
+    let result = match check_plan(plan, name, scen, sd)? {
+        None => return Ok(ExitCode::from(1)),
+        Some(r) => r,
+    };
+    match result {
         Ok(cp) => {
             println!(
                 "VALID: {} step(s) in dispatch order; predicted complete kits: [{}]",
@@ -733,18 +863,7 @@ fn validate(plan: &Path, name: &str, scen: &Path, sd: &Path) -> Result<ExitCode>
             Ok(ExitCode::SUCCESS)
         }
         Err(diags) => {
-            println!("INVALID: {} diagnostic(s)", diags.len());
-            for d in diags {
-                println!(
-                    "  [{:?}] {}{}: {}",
-                    d.category,
-                    d.step_id
-                        .map(|s| format!("step `{s}` "))
-                        .unwrap_or_default(),
-                    d.path,
-                    d.message
-                );
-            }
+            print_diagnostics(&diags);
             Ok(ExitCode::from(1))
         }
     }

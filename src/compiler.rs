@@ -77,6 +77,11 @@ fn diag(
     }
 }
 
+/// A structural diagnostic about the plan as a whole (e.g. from code generation).
+pub fn structure_diagnostic(message: String) -> Diagnostic {
+    diag(DiagCategory::Structure, None, "steps", message)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Limits {
     pub max_actions: u32,

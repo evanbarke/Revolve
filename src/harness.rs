@@ -10,6 +10,7 @@ use crate::planner::faulty::FaultyPlanner;
 use crate::planner::fixed::FixedPlanner;
 use crate::planner::live::{LiveConfig, LivePlanner};
 use crate::planner::scripted::ScriptedPlanner;
+use crate::program::ExecEngine;
 use crate::runtime::ExecOptions;
 use crate::scenario::Scenario;
 use crate::sim::SimWorld;
@@ -89,12 +90,31 @@ pub fn list_runs(state_dir: &Path) -> Vec<String> {
 }
 
 /// Create a fresh run directory: scenario copy, simulator world, run store.
+/// Create a run whose plans execute as compiled programs (the default engine).
 pub fn create_run(
     state_dir: &Path,
     sc: &Scenario,
     arm: Arm,
     planner: &PlannerChoice,
     human_mode: &str,
+) -> Result<(String, PathBuf)> {
+    create_run_with(
+        state_dir,
+        sc,
+        arm,
+        planner,
+        human_mode,
+        ExecEngine::Compiled,
+    )
+}
+
+pub fn create_run_with(
+    state_dir: &Path,
+    sc: &Scenario,
+    arm: Arm,
+    planner: &PlannerChoice,
+    human_mode: &str,
+    engine: ExecEngine,
 ) -> Result<(String, PathBuf)> {
     let run_id = fresh_id(&format!(
         "run-{}",
@@ -140,6 +160,10 @@ pub fn create_run(
         human_mode: human_mode.into(),
         created_at_ms: now_ms(),
         seed: sc.seed,
+        engine: match arm {
+            Arm::Revolve => engine.as_str().into(),
+            Arm::Baseline => "direct".into(),
+        },
     };
     RunStore::create(&dir, &meta, &sc.goal, &sc.inventory_record())?;
     Ok((run_id, dir))

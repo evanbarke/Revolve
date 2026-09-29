@@ -72,14 +72,14 @@
       },
       "input_tokens_total": null,
       "invariant_violations": 0,
-      "max_peak_rss_bytes": 9342976,
-      "mean_wall_ms": 499,
+      "max_peak_rss_bytes": 9482240,
+      "mean_wall_ms": 507,
       "planner_requests": {
         "mean": 22.642857142857142,
         "total": 317
       },
       "recovery": {
-        "mean_ms_fault_to_final_state": 427,
+        "mean_ms_fault_to_final_state": 431,
         "of_faulted_trials": 6,
         "successful": 6
       },
@@ -160,14 +160,14 @@
       },
       "input_tokens_total": null,
       "invariant_violations": 0,
-      "max_peak_rss_bytes": 10403840,
-      "mean_wall_ms": 406,
+      "max_peak_rss_bytes": 14544896,
+      "mean_wall_ms": 425,
       "planner_requests": {
         "mean": 1.4285714285714286,
         "total": 20
       },
       "recovery": {
-        "mean_ms_fault_to_final_state": 307,
+        "mean_ms_fault_to_final_state": 317,
         "of_faulted_trials": 6,
         "successful": 6
       },
@@ -184,7 +184,7 @@
       "baseline"
     ],
     "completed_trials": 28,
-    "finished_at_ms": 1790692333397,
+    "finished_at_ms": 1790705792195,
     "host": {
       "arch": "x86_64",
       "os": "windows"
@@ -192,9 +192,10 @@
     "incomplete_trials": 0,
     "live_model_calls_performed": false,
     "planner": "scripted",
+    "revolve_engine": "compiled",
     "revolve_version": "0.1.0",
     "scenarios": 14,
-    "started_at_ms": 1790692318168,
+    "started_at_ms": 1790705776542,
     "suite": "scenarios\\development",
     "trials_per_scenario_arm": 1
   }

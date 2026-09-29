@@ -2,6 +2,7 @@
 
 - Suite: `scenarios\development` (14 scenario files), trials per scenario/arm: 1
 - Planner: `scripted`
+- Revolve engine: `compiled` (baseline: direct tool calls)
 - Completed trials: 28; incomplete (excluded, listed below): 0
 - Host: windows / x86_64
 
@@ -20,13 +21,13 @@
 | invariant violations | 0 | 0 |
 | unauthorized attempted / executed | 1 / 0 | 0 / 0 |
 | recovery success (faulted trials) | 6 / 6 | 6 / 6 |
-| mean ms fault -> final state (successful) | 427 | 307 |
+| mean ms fault -> final state (successful) | 431 | 317 |
 | human interventions | {"answer":3,"cancel":1,"correct":2,"restore_evidence":1,"restore_planner":1} | {"answer":3,"cancel":1,"correct":2,"restore_evidence":1} |
 | planner/model requests (total) | 317 | 20 |
 | input tokens (total) | n/a (scripted) | n/a (scripted) |
 | adapter dispatches (total) | 294 | 293 |
-| mean wall ms per trial | 499 | 406 |
-| max peak RSS of an executor process (bytes) | 9342976 | 10403840 |
+| mean wall ms per trial | 507 | 425 |
+| max peak RSS of an executor process (bytes) | 9482240 | 14544896 |
 
 ## Per scenario
 

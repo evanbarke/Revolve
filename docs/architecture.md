@@ -11,6 +11,8 @@ baseline for comparison.
         ▼                                  ▼
  ┌──────────────────────────── executor (runtime.rs) ────────────────────────────┐
  │ observe ─► inventory sync ─► ask planner ─► compile/validate (compiler.rs)      │
+ │            ─► codegen.rs: Wasm program ─► program.rs: native code, replay,     │
+ │               asks for the next step (engine `compiled`; see docs/codegen.md)  │
  │                                   policy (policy.rs, runtime-held grants)       │
  │ next step: fresh observation ─► preconditions ─► ATOMIC CLAIM (store.rs)        │
  │            ─► gateway.dispatch (gateway.rs: policy, types, evidence)            │
@@ -32,6 +34,7 @@ baseline for comparison.
 | Capability registry | `capability.rs` | Versioned contracts; retry/reconciliation decisions read these flags. |
 | Planner | `planner/` | Returns a proposal, a clarification, or an inability. Never touches stores. |
 | Compiler/validator | `compiler.rs` | Parse → schema → structure → binding → authorisation → budget → abstract execution. |
+| Code generation | `codegen.rs`, `program.rs` | Checked plan → WebAssembly program → native code (Cranelift). The program imports only its plan's capabilities, never performs effects itself, and is validated against the plan at every step. |
 | Policy | `policy.rs` | Grants held by the runtime. Checked at compile time and again at dispatch. |
 | Executor | `runtime.rs` | Sole owner of a run (OS file lock). Persists before dispatch. |
 | Adapters | `sim.rs` (workspace), `inventory.rs` (ledger) | Each adapter enforces its own preconditions and idempotency. |

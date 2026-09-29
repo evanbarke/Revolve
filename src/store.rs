@@ -190,6 +190,35 @@ CREATE TABLE IF NOT EXISTS ledger (
 );
 "#;
 
+/// Compiled plan programs (also created when a run from before they existed is opened).
+const PROGRAMS_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS programs (
+  plan_seq INTEGER PRIMARY KEY,
+  codegen TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  wasm BLOB NOT NULL,
+  imports TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL
+);
+"#;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProgramRow {
+    pub plan_seq: i64,
+    pub codegen: String,
+    pub sha256: String,
+    #[serde(skip)]
+    pub wasm: Vec<u8>,
+    pub size_bytes: usize,
+    pub imports: Vec<String>,
+    pub created_at_ms: i64,
+}
+
+fn legacy_engine() -> String {
+    // Runs created before compiled plans existed were interpreted.
+    "interpreted".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunMeta {
     pub run_id: String,
@@ -202,6 +231,10 @@ pub struct RunMeta {
     pub human_mode: String,
     pub created_at_ms: i64,
     pub seed: u64,
+    /// How plans are executed: "compiled" (Wasm programs, native code),
+    /// "interpreted", or "direct" (baseline: no plans).
+    #[serde(default = "legacy_engine")]
+    pub engine: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -356,6 +389,7 @@ impl RunStore {
         goal.validate()?;
         let mut conn = Self::open_conn(&path)?;
         conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(PROGRAMS_SCHEMA)?;
         let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO meta(key, value) VALUES ('run', ?1)",
@@ -407,6 +441,7 @@ impl RunStore {
             );
         }
         let conn = Self::open_conn(&path)?;
+        conn.execute_batch(PROGRAMS_SCHEMA)?;
         let meta: String =
             conn.query_row("SELECT value FROM meta WHERE key = 'run'", [], |r| r.get(0))?;
         let meta: RunMeta = serde_json::from_str(&meta)?;
@@ -724,6 +759,52 @@ impl RunStore {
             params![goal_revision as i64, world_revision.map(|w| w as i64), status, proposal.to_string(), planner, diagnostics.to_string(), now_ms()],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Record the compiled program of a plan (the first one recorded is kept).
+    pub fn insert_program(&self, plan_seq: i64, p: &crate::codegen::Program) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO programs(plan_seq, codegen, sha256, wasm, imports, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![plan_seq, crate::codegen::CODEGEN, p.sha256, p.wasm, serde_json::to_string(&p.imports)?, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn program(&self, plan_seq: i64) -> Result<Option<ProgramRow>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT plan_seq, codegen, sha256, wasm, imports, created_at_ms FROM programs WHERE plan_seq = ?1",
+                params![plan_seq],
+                |r| {
+                    let wasm: Vec<u8> = r.get(3)?;
+                    Ok(ProgramRow {
+                        plan_seq: r.get(0)?,
+                        codegen: r.get(1)?,
+                        sha256: r.get(2)?,
+                        size_bytes: wasm.len(),
+                        wasm,
+                        imports: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or_default(),
+                        created_at_ms: r.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn programs(&self) -> Result<Vec<ProgramRow>> {
+        let mut out = vec![];
+        let seqs: Vec<i64> = self
+            .conn
+            .prepare("SELECT plan_seq FROM programs ORDER BY plan_seq")?
+            .query_map([], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        for s in seqs {
+            out.extend(self.program(s)?);
+        }
+        Ok(out)
     }
 
     pub fn set_plan_status(&self, plan_seq: i64, status: &str) -> Result<()> {
