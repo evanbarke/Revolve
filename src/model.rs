@@ -87,10 +87,16 @@ impl Observation {
         self.objects_at(GRIPPER).next()
     }
     pub fn trays(&self) -> Vec<&LocationView> {
-        self.locations.iter().filter(|l| l.loc_type == LocationType::Tray).collect()
+        self.locations
+            .iter()
+            .filter(|l| l.loc_type == LocationType::Tray)
+            .collect()
     }
     pub fn bins(&self) -> Vec<&LocationView> {
-        self.locations.iter().filter(|l| l.loc_type == LocationType::Bin).collect()
+        self.locations
+            .iter()
+            .filter(|l| l.loc_type == LocationType::Bin)
+            .collect()
     }
 }
 
@@ -106,10 +112,10 @@ pub struct Classification {
 
 /// Effective kind of an observed object after applying human classifications.
 pub fn effective_kind(obj: &ObjectView, classes: &[Classification]) -> String {
-    if obj.observed_kind == UNKNOWN_KIND {
-        if let Some(c) = classes.iter().rev().find(|c| c.object_id == obj.object_id) {
-            return c.kind.clone();
-        }
+    if obj.observed_kind == UNKNOWN_KIND
+        && let Some(c) = classes.iter().rev().find(|c| c.object_id == obj.object_id)
+    {
+        return c.kind.clone();
     }
     obj.observed_kind.clone()
 }
@@ -157,20 +163,30 @@ pub const MAX_PER_KIND_PER_KIT: u32 = 6;
 impl GoalSpec {
     pub fn validate(&self) -> Result<()> {
         if self.kit_quantity == 0 || self.kit_quantity > MAX_KITS {
-            bail!("kit_quantity must be between 1 and {MAX_KITS} (got {})", self.kit_quantity);
+            bail!(
+                "kit_quantity must be between 1 and {MAX_KITS} (got {})",
+                self.kit_quantity
+            );
         }
         if self.kit_components.is_empty() {
             bail!("kit_components must list at least one part kind");
         }
         for (k, n) in &self.kit_components {
             if !is_known_kind(k) {
-                bail!("kit_components: unknown part kind `{k}` (known: {})", KNOWN_KINDS.join(", "));
+                bail!(
+                    "kit_components: unknown part kind `{k}` (known: {})",
+                    KNOWN_KINDS.join(", ")
+                );
             }
             if *n == 0 || *n > MAX_PER_KIND_PER_KIT {
                 bail!("kit_components.{k}: quantity must be 1..={MAX_PER_KIND_PER_KIT} (got {n})");
             }
         }
-        for s in self.approved_substitutions.iter().chain(&self.declined_substitutions) {
+        for s in self
+            .approved_substitutions
+            .iter()
+            .chain(&self.declined_substitutions)
+        {
             if !is_known_kind(&s.replace) || !is_known_kind(&s.with) || s.replace == s.with {
                 bail!("invalid substitution {} -> {}", s.replace, s.with);
             }
@@ -190,15 +206,23 @@ impl GoalSpec {
     }
 
     pub fn is_declined(&self, replace: &str, with: &str) -> bool {
-        self.declined_substitutions.iter().any(|s| s.replace == replace && s.with == with)
+        self.declined_substitutions
+            .iter()
+            .any(|s| s.replace == replace && s.with == with)
     }
 
     pub fn is_approved(&self, replace: &str, with: &str) -> bool {
-        self.approved_substitutions.iter().any(|s| s.replace == replace && s.with == with)
+        self.approved_substitutions
+            .iter()
+            .any(|s| s.replace == replace && s.with == with)
     }
 
     pub fn summary(&self) -> String {
-        let parts: Vec<String> = self.kit_components.iter().map(|(k, n)| format!("{n}x {k}")).collect();
+        let parts: Vec<String> = self
+            .kit_components
+            .iter()
+            .map(|(k, n)| format!("{n}x {k}"))
+            .collect();
         format!("{} kit(s) of [{}]", self.kit_quantity, parts.join(", "))
     }
 }
@@ -277,7 +301,9 @@ pub fn parse_restricted_request(text: &str) -> Result<GoalSpec> {
         }
     }
     let Some(kit_quantity) = qty else {
-        bail!("scripted parser: expected `Prepare <N> kits` (restricted grammar; free-text interpretation needs a live planner)");
+        bail!(
+            "scripted parser: expected `Prepare <N> kits` (restricted grammar; free-text interpretation needs a live planner)"
+        );
     };
     let start = words
         .iter()
@@ -287,7 +313,10 @@ pub fn parse_restricted_request(text: &str) -> Result<GoalSpec> {
     let mut i = start + 1;
     while i < words.len() {
         if let Some(n) = num(&words[i]) {
-            let (kind, adv) = match (words.get(i + 1).map(String::as_str), words.get(i + 2).map(String::as_str)) {
+            let (kind, adv) = match (
+                words.get(i + 1).map(String::as_str),
+                words.get(i + 2).map(String::as_str),
+            ) {
                 (Some("red"), Some("block" | "blocks")) => ("red_block", 3),
                 (Some("blue"), Some("block" | "blocks")) => ("blue_block", 3),
                 (Some("green"), Some("block" | "blocks")) => ("green_block", 3),
@@ -297,7 +326,10 @@ pub fn parse_restricted_request(text: &str) -> Result<GoalSpec> {
             };
             *comps.entry(kind.to_string()).or_default() += n;
             i += adv;
-        } else if matches!(words[i].as_str(), "and" | "each" | "kit" | "update" | "tell" | "ask") {
+        } else if matches!(
+            words[i].as_str(),
+            "and" | "each" | "kit" | "update" | "tell" | "ask"
+        ) {
             // Clauses after the component list ("Update inventory...", "Tell me...") end the list.
             if !matches!(words[i].as_str(), "and") && !comps.is_empty() {
                 break;
@@ -305,7 +337,10 @@ pub fn parse_restricted_request(text: &str) -> Result<GoalSpec> {
             i += 1;
         } else {
             if comps.is_empty() {
-                bail!("scripted parser: unexpected word `{}` in component list", words[i]);
+                bail!(
+                    "scripted parser: unexpected word `{}` in component list",
+                    words[i]
+                );
             }
             break;
         }
@@ -343,12 +378,17 @@ mod tests {
     #[test]
     fn rejects_unsupported_text_instead_of_guessing() {
         assert!(parse_restricted_request("Could you tidy the workbench?").is_err());
-        assert!(parse_restricted_request("Prepare 2 kits. Each kit needs one purple gear.").is_err());
+        assert!(
+            parse_restricted_request("Prepare 2 kits. Each kit needs one purple gear.").is_err()
+        );
     }
 
     #[test]
     fn kit_evaluation_exact_and_substitution() {
-        let mut g = parse_restricted_request("Prepare 1 kit. Each kit needs one red block, one blue block and two washers").unwrap();
+        let mut g = parse_restricted_request(
+            "Prepare 1 kit. Each kit needs one red block, one blue block and two washers",
+        )
+        .unwrap();
         let mut c = KindCounts::new();
         c.insert("red_block".into(), 1);
         c.insert("green_block".into(), 1);
@@ -357,12 +397,18 @@ mod tests {
         assert!(!ok);
         assert_eq!(missing.get("blue_block"), Some(&1));
         assert_eq!(excess.get("green_block"), Some(&1));
-        g.approved_substitutions.push(Substitution { replace: "blue_block".into(), with: "green_block".into() });
+        g.approved_substitutions.push(Substitution {
+            replace: "blue_block".into(),
+            with: "green_block".into(),
+        });
         let (ok, _, _) = evaluate_kit(&c, &g);
         assert!(ok);
         c.insert("washer".into(), 3);
         let (ok, _, excess) = evaluate_kit(&c, &g);
-        assert!(!ok, "excess parts mean the kit does not match the composition");
+        assert!(
+            !ok,
+            "excess parts mean the kit does not match the composition"
+        );
         assert_eq!(excess.get("washer"), Some(&1));
     }
 }

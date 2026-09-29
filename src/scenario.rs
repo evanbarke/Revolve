@@ -68,7 +68,9 @@ impl FaultSpec {
             | FaultSpec::TimeoutBeforeEffect { on, .. }
             | FaultSpec::DestinationUnavailable { on, .. }
             | FaultSpec::RemoveObject { on, .. } => Some(on),
-            FaultSpec::PlannerUnavailable { on } | FaultSpec::InjectUnauthorizedAction { on } => on.as_ref(),
+            FaultSpec::PlannerUnavailable { on } | FaultSpec::InjectUnauthorizedAction { on } => {
+                on.as_ref()
+            }
         }
     }
 }
@@ -173,16 +175,21 @@ pub struct Scenario {
 
 impl Scenario {
     pub fn load(path: &Path) -> Result<Scenario> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| crate::util::Error::new(format!("reading scenario {}: {e}", path.display())))?;
-        let s: Scenario = serde_json::from_str(&text)
-            .map_err(|e| crate::util::Error::new(format!("parsing scenario {}: {e}", path.display())))?;
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            crate::util::Error::new(format!("reading scenario {}: {e}", path.display()))
+        })?;
+        let s: Scenario = serde_json::from_str(&text).map_err(|e| {
+            crate::util::Error::new(format!("parsing scenario {}: {e}", path.display()))
+        })?;
         s.goal.validate()?;
         Ok(s)
     }
 
     pub fn inventory_record(&self) -> KindCounts {
-        let mut rec = self.inventory_record.clone().unwrap_or_else(|| self.world.stock.clone());
+        let mut rec = self
+            .inventory_record
+            .clone()
+            .unwrap_or_else(|| self.world.stock.clone());
         for k in crate::model::KNOWN_KINDS {
             rec.entry(k.to_string()).or_insert(0);
         }
@@ -210,7 +217,12 @@ pub fn resolve(name_or_path: &str, scenarios_dir: &Path) -> Result<PathBuf> {
 
 pub fn list_dir(dir: &Path) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect())
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "json"))
+                .collect()
+        })
         .unwrap_or_default();
     v.sort();
     v

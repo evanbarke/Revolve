@@ -20,8 +20,16 @@ impl Planner for FixedPlanner {
         "fixed-plan".into()
     }
 
-    fn plan(&mut self, _req: &PlanningRequest) -> (Result<PlannerResponse, PlannerError>, CallInfo) {
-        let info = CallInfo { latency_ms: 0, transport_attempts: 1, usage: None, detail: None };
+    fn plan(
+        &mut self,
+        _req: &PlanningRequest,
+    ) -> (Result<PlannerResponse, PlannerError>, CallInfo) {
+        let info = CallInfo {
+            latency_ms: 0,
+            transport_attempts: 1,
+            usage: None,
+            detail: None,
+        };
         if self.used {
             return (
                 Ok(PlannerResponse::Unable {

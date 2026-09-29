@@ -2,7 +2,7 @@
 //! planner prompts and documentation all read from. Retry/reconciliation
 //! decisions are taken from these declarations, never from operation names.
 
-use crate::model::{is_known_kind, KindCounts};
+use crate::model::{KindCounts, is_known_kind};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -25,14 +25,19 @@ impl ArgType {
         let id_like = |s: &str| {
             !s.is_empty()
                 && s.len() <= 64
-                && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+                && s.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
         };
         match self {
-            ArgType::ObjectId | ArgType::LocationId | ArgType::ReservationId | ArgType::OpKey => match v.as_str() {
-                Some(s) if id_like(s) => Ok(()),
-                Some(s) => Err(format!("`{s}` is not a valid identifier (lowercase ascii, digits, '-', '_'; max 64)")),
-                None => Err(format!("expected a string identifier, got {v}")),
-            },
+            ArgType::ObjectId | ArgType::LocationId | ArgType::ReservationId | ArgType::OpKey => {
+                match v.as_str() {
+                    Some(s) if id_like(s) => Ok(()),
+                    Some(s) => Err(format!(
+                        "`{s}` is not a valid identifier (lowercase ascii, digits, '-', '_'; max 64)"
+                    )),
+                    None => Err(format!("expected a string identifier, got {v}")),
+                }
+            }
             ArgType::PartKind => match v.as_str() {
                 Some(s) if is_known_kind(s) => Ok(()),
                 Some(s) => Err(format!("unknown part kind `{s}`")),
@@ -43,7 +48,9 @@ impl ArgType {
                 None => Err(format!("expected a non-negative integer, got {v}")),
             },
             ArgType::KindCounts => {
-                let obj = v.as_object().ok_or_else(|| format!("expected an object of part_kind -> count, got {v}"))?;
+                let obj = v
+                    .as_object()
+                    .ok_or_else(|| format!("expected an object of part_kind -> count, got {v}"))?;
                 if obj.is_empty() {
                     return Err("counts must not be empty".into());
                 }
@@ -136,8 +143,20 @@ impl Contract {
     }
 }
 
-const PHYS_ERRORS: &[&str] = &["precondition_failed", "key_conflict", "unavailable", "timeout", "malformed"];
-const INV_ERRORS: &[&str] = &["insufficient_stock", "unknown_reservation", "key_conflict", "evidence_mismatch", "malformed"];
+const PHYS_ERRORS: &[&str] = &[
+    "precondition_failed",
+    "key_conflict",
+    "unavailable",
+    "timeout",
+    "malformed",
+];
+const INV_ERRORS: &[&str] = &[
+    "insufficient_stock",
+    "unknown_reservation",
+    "key_conflict",
+    "evidence_mismatch",
+    "malformed",
+];
 
 pub fn registry() -> Vec<Contract> {
     vec![
@@ -146,7 +165,11 @@ pub fn registry() -> Vec<Contract> {
             version: "1",
             summary: "Observe the workspace: locations, availability, visible objects and their observed classification.",
             args: vec![],
-            outputs: vec![OutputSpec { name: "world_revision", ty: ArgType::WorldRevision, description: "revision of the snapshot" }],
+            outputs: vec![OutputSpec {
+                name: "world_revision",
+                ty: ArgType::WorldRevision,
+                description: "revision of the snapshot",
+            }],
             resources: "none",
             preconditions: "none",
             effects: "none (read-only). Some locations may be reported as withheld when evidence is unavailable.",
@@ -166,10 +189,22 @@ pub fn registry() -> Vec<Contract> {
             version: "1",
             summary: "Move one object from a bin or tray into the (single-object) gripper.",
             args: vec![
-                ArgSpec { name: "object_id", ty: ArgType::ObjectId, description: "object to pick" },
-                ArgSpec { name: "source_id", ty: ArgType::LocationId, description: "bin or tray currently holding it" },
+                ArgSpec {
+                    name: "object_id",
+                    ty: ArgType::ObjectId,
+                    description: "object to pick",
+                },
+                ArgSpec {
+                    name: "source_id",
+                    ty: ArgType::LocationId,
+                    description: "bin or tray currently holding it",
+                },
             ],
-            outputs: vec![OutputSpec { name: "object_id", ty: ArgType::ObjectId, description: "object now held" }],
+            outputs: vec![OutputSpec {
+                name: "object_id",
+                ty: ArgType::ObjectId,
+                description: "object now held",
+            }],
             resources: "gripper (exclusive), the object (exclusive), source location",
             preconditions: "gripper_empty; object_at(object, source); location_available(source)",
             effects: "object_at(object, gripper)",
@@ -189,10 +224,22 @@ pub fn registry() -> Vec<Contract> {
             version: "1",
             summary: "Place the held object into a tray, or return it to the bin that accepts its kind.",
             args: vec![
-                ArgSpec { name: "object_id", ty: ArgType::ObjectId, description: "object currently held" },
-                ArgSpec { name: "destination_id", ty: ArgType::LocationId, description: "tray, or the bin for the object's kind" },
+                ArgSpec {
+                    name: "object_id",
+                    ty: ArgType::ObjectId,
+                    description: "object currently held",
+                },
+                ArgSpec {
+                    name: "destination_id",
+                    ty: ArgType::LocationId,
+                    description: "tray, or the bin for the object's kind",
+                },
             ],
-            outputs: vec![OutputSpec { name: "object_id", ty: ArgType::ObjectId, description: "object placed" }],
+            outputs: vec![OutputSpec {
+                name: "object_id",
+                ty: ArgType::ObjectId,
+                description: "object placed",
+            }],
             resources: "gripper (exclusive), the object (exclusive), destination location",
             preconditions: "gripper_holds(object); location_available(destination); bin destinations accept only their kind",
             effects: "object_at(object, destination); gripper_empty",
@@ -211,8 +258,16 @@ pub fn registry() -> Vec<Contract> {
             id: "inventory.reserve",
             version: "1",
             summary: "Reserve stock counts in the inventory record for this run.",
-            args: vec![ArgSpec { name: "counts", ty: ArgType::KindCounts, description: "part_kind -> quantity to reserve" }],
-            outputs: vec![OutputSpec { name: "reservation_id", ty: ArgType::ReservationId, description: "id of the new reservation" }],
+            args: vec![ArgSpec {
+                name: "counts",
+                ty: ArgType::KindCounts,
+                description: "part_kind -> quantity to reserve",
+            }],
+            outputs: vec![OutputSpec {
+                name: "reservation_id",
+                ty: ArgType::ReservationId,
+                description: "id of the new reservation",
+            }],
             resources: "inventory record",
             preconditions: "on_hand - reserved >= counts for every kind",
             effects: "reserved += counts; a reservation is opened",
@@ -232,10 +287,26 @@ pub fn registry() -> Vec<Contract> {
             version: "1",
             summary: "Record verified consumption of reserved stock, citing the object observed in a kit tray.",
             args: vec![
-                ArgSpec { name: "reservation_id", ty: ArgType::ReservationId, description: "reservation to draw from" },
-                ArgSpec { name: "part_kind", ty: ArgType::PartKind, description: "kind consumed" },
-                ArgSpec { name: "quantity", ty: ArgType::Quantity, description: "units consumed" },
-                ArgSpec { name: "evidence_object_id", ty: ArgType::ObjectId, description: "object observed in a kit tray" },
+                ArgSpec {
+                    name: "reservation_id",
+                    ty: ArgType::ReservationId,
+                    description: "reservation to draw from",
+                },
+                ArgSpec {
+                    name: "part_kind",
+                    ty: ArgType::PartKind,
+                    description: "kind consumed",
+                },
+                ArgSpec {
+                    name: "quantity",
+                    ty: ArgType::Quantity,
+                    description: "units consumed",
+                },
+                ArgSpec {
+                    name: "evidence_object_id",
+                    ty: ArgType::ObjectId,
+                    description: "object observed in a kit tray",
+                },
             ],
             outputs: vec![],
             resources: "inventory record, the reservation (exclusive)",
@@ -256,8 +327,16 @@ pub fn registry() -> Vec<Contract> {
             id: "inventory.release",
             version: "1",
             summary: "Release whatever remains of a reservation.",
-            args: vec![ArgSpec { name: "reservation_id", ty: ArgType::ReservationId, description: "reservation to close" }],
-            outputs: vec![OutputSpec { name: "released", ty: ArgType::KindCounts, description: "counts released" }],
+            args: vec![ArgSpec {
+                name: "reservation_id",
+                ty: ArgType::ReservationId,
+                description: "reservation to close",
+            }],
+            outputs: vec![OutputSpec {
+                name: "released",
+                ty: ArgType::KindCounts,
+                description: "counts released",
+            }],
             resources: "inventory record, the reservation (exclusive)",
             preconditions: "reservation exists",
             effects: "reserved -= remaining; reservation closed",
@@ -277,9 +356,21 @@ pub fn registry() -> Vec<Contract> {
             version: "1",
             summary: "Record that a previously consumed part was returned to its stock bin (rework).",
             args: vec![
-                ArgSpec { name: "part_kind", ty: ArgType::PartKind, description: "kind returned" },
-                ArgSpec { name: "quantity", ty: ArgType::Quantity, description: "units returned" },
-                ArgSpec { name: "evidence_object_id", ty: ArgType::ObjectId, description: "object observed back in its bin" },
+                ArgSpec {
+                    name: "part_kind",
+                    ty: ArgType::PartKind,
+                    description: "kind returned",
+                },
+                ArgSpec {
+                    name: "quantity",
+                    ty: ArgType::Quantity,
+                    description: "units returned",
+                },
+                ArgSpec {
+                    name: "evidence_object_id",
+                    ty: ArgType::ObjectId,
+                    description: "object observed back in its bin",
+                },
             ],
             outputs: vec![],
             resources: "inventory record",
@@ -301,9 +392,21 @@ pub fn registry() -> Vec<Contract> {
             version: "1",
             summary: "Correct the inventory record to an observed stock count, citing the observation.",
             args: vec![
-                ArgSpec { name: "part_kind", ty: ArgType::PartKind, description: "kind to correct" },
-                ArgSpec { name: "observed_count", ty: ArgType::Quantity, description: "count seen in the stock bin" },
-                ArgSpec { name: "observation_revision", ty: ArgType::WorldRevision, description: "world revision of the cited observation" },
+                ArgSpec {
+                    name: "part_kind",
+                    ty: ArgType::PartKind,
+                    description: "kind to correct",
+                },
+                ArgSpec {
+                    name: "observed_count",
+                    ty: ArgType::Quantity,
+                    description: "count seen in the stock bin",
+                },
+                ArgSpec {
+                    name: "observation_revision",
+                    ty: ArgType::WorldRevision,
+                    description: "world revision of the cited observation",
+                },
             ],
             outputs: vec![],
             resources: "inventory record",
@@ -324,7 +427,11 @@ pub fn registry() -> Vec<Contract> {
             id: "ops.status",
             version: "1",
             summary: "Look up the recorded outcome of an operation key (applied, rejected, not found, or unavailable).",
-            args: vec![ArgSpec { name: "op_key", ty: ArgType::OpKey, description: "operation key to look up" }],
+            args: vec![ArgSpec {
+                name: "op_key",
+                ty: ArgType::OpKey,
+                description: "operation key to look up",
+            }],
             outputs: vec![],
             resources: "none",
             preconditions: "none",
@@ -354,13 +461,21 @@ pub fn exclusive_resources(capability: &str, args: &serde_json::Map<String, Valu
     let s = |k: &str| -> String {
         match args.get(k) {
             Some(Value::String(v)) => v.clone(),
-            Some(Value::Object(o)) => o.get("$ref").and_then(Value::as_str).map(|r| format!("ref:{r}")).unwrap_or_default(),
+            Some(Value::Object(o)) => o
+                .get("$ref")
+                .and_then(Value::as_str)
+                .map(|r| format!("ref:{r}"))
+                .unwrap_or_default(),
             _ => String::new(),
         }
     };
     match capability {
-        "workspace.pick" | "workspace.place" => vec!["gripper".into(), format!("object:{}", s("object_id"))],
-        "inventory.consume" | "inventory.release" => vec![format!("reservation:{}", s("reservation_id"))],
+        "workspace.pick" | "workspace.place" => {
+            vec!["gripper".into(), format!("object:{}", s("object_id"))]
+        }
+        "inventory.consume" | "inventory.release" => {
+            vec![format!("reservation:{}", s("reservation_id"))]
+        }
         _ => vec![],
     }
 }
@@ -373,6 +488,10 @@ pub fn logical_descriptor(capability: &str, resolved_args: &Value) -> String {
 
 pub fn counts_from_value(v: &Value) -> KindCounts {
     v.as_object()
-        .map(|o| o.iter().filter_map(|(k, n)| n.as_u64().map(|n| (k.clone(), n as u32))).collect())
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, n)| n.as_u64().map(|n| (k.clone(), n as u32)))
+                .collect()
+        })
         .unwrap_or_default()
 }

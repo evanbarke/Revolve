@@ -128,7 +128,11 @@ mod win_mem {
     }
     unsafe extern "system" {
         fn GetCurrentProcess() -> isize;
-        fn K32GetProcessMemoryInfo(process: isize, counters: *mut ProcessMemoryCounters, cb: u32) -> i32;
+        fn K32GetProcessMemoryInfo(
+            process: isize,
+            counters: *mut ProcessMemoryCounters,
+            cb: u32,
+        ) -> i32;
     }
     pub fn peak_working_set() -> Option<u64> {
         let mut c = ProcessMemoryCounters {
@@ -145,7 +149,11 @@ mod win_mem {
         };
         // SAFETY: pseudo-handle from GetCurrentProcess is always valid; struct is sized per cb.
         let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) };
-        if ok != 0 { Some(c.PeakWorkingSetSize as u64) } else { None }
+        if ok != 0 {
+            Some(c.PeakWorkingSetSize as u64)
+        } else {
+            None
+        }
     }
 }
 

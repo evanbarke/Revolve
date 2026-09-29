@@ -160,14 +160,25 @@ pub enum Condition {
 impl Condition {
     pub fn describe(&self) -> String {
         match self {
-            Condition::ObjectAt { object_id, location_id } => format!("object_at({object_id}, {location_id})"),
+            Condition::ObjectAt {
+                object_id,
+                location_id,
+            } => format!("object_at({object_id}, {location_id})"),
             Condition::GripperEmpty => "gripper_empty".into(),
             Condition::GripperHolds { object_id } => format!("gripper_holds({object_id})"),
-            Condition::LocationAvailable { location_id } => format!("location_available({location_id})"),
-            Condition::QuantityAtLeast { location_id, part_kind, quantity } => {
+            Condition::LocationAvailable { location_id } => {
+                format!("location_available({location_id})")
+            }
+            Condition::QuantityAtLeast {
+                location_id,
+                part_kind,
+                quantity,
+            } => {
                 format!("quantity_at_least({location_id}, {part_kind}, {quantity})")
             }
-            Condition::GoalRevisionEquals { revision } => format!("goal_revision_equals({revision})"),
+            Condition::GoalRevisionEquals { revision } => {
+                format!("goal_revision_equals({revision})")
+            }
         }
     }
 }
@@ -204,20 +215,25 @@ pub enum ArgValue {
 
 impl ArgValue {
     pub fn parse(v: &serde_json::Value) -> Result<ArgValue, String> {
-        if let Some(obj) = v.as_object() {
-            if let Some(r) = obj.get("$ref") {
-                if obj.len() != 1 {
-                    return Err("an output reference object must contain only `$ref`".into());
-                }
-                let s = r.as_str().ok_or("`$ref` must be a string of the form `step_id.output`")?;
-                let (step, out) = s
-                    .rsplit_once('.')
-                    .ok_or("`$ref` must be of the form `step_id.output`")?;
-                if step.is_empty() || out.is_empty() {
-                    return Err("`$ref` must be of the form `step_id.output`".into());
-                }
-                return Ok(ArgValue::Ref { step_id: step.into(), output: out.into() });
+        if let Some(obj) = v.as_object()
+            && let Some(r) = obj.get("$ref")
+        {
+            if obj.len() != 1 {
+                return Err("an output reference object must contain only `$ref`".into());
             }
+            let s = r
+                .as_str()
+                .ok_or("`$ref` must be a string of the form `step_id.output`")?;
+            let (step, out) = s
+                .rsplit_once('.')
+                .ok_or("`$ref` must be of the form `step_id.output`")?;
+            if step.is_empty() || out.is_empty() {
+                return Err("`$ref` must be of the form `step_id.output`".into());
+            }
+            return Ok(ArgValue::Ref {
+                step_id: step.into(),
+                output: out.into(),
+            });
         }
         Ok(ArgValue::Literal(v.clone()))
     }

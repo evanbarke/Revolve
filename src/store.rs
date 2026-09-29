@@ -6,10 +6,10 @@
 
 use crate::bail;
 use crate::model::{Classification, GoalSpec, KindCounts, Observation, Substitution};
-use crate::util::{now_ms, sha256_hex, Error, Result};
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use crate::util::{Error, Result, now_ms, sha256_hex};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -26,7 +26,12 @@ pub const A_SUPERSEDED: &str = "superseded"; // invalidated before dispatch (goa
 pub const A_CANCELLED: &str = "cancelled"; // invalidated before dispatch by cancel
 pub const A_DENIED: &str = "denied"; // policy denied at dispatch; no effect
 
-pub const UNSETTLED: &[&str] = &[A_DISPATCH_RECORDED, A_ACKNOWLEDGED, A_OUTCOME_UNKNOWN, A_RETRY_PENDING];
+pub const UNSETTLED: &[&str] = &[
+    A_DISPATCH_RECORDED,
+    A_ACKNOWLEDGED,
+    A_OUTCOME_UNKNOWN,
+    A_RETRY_PENDING,
+];
 
 // Run statuses.
 pub const R_CREATED: &str = "created";
@@ -268,6 +273,15 @@ pub struct QuestionRow {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GoalRevisionRow {
+    pub revision: u32,
+    pub spec: GoalSpec,
+    pub author: String,
+    pub reason: Option<String>,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PlanRow {
     pub plan_seq: i64,
     pub goal_revision: u32,
@@ -281,15 +295,22 @@ pub struct PlanRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaimResult {
-    Claimed { op_key: String, occurrence: i64 },
+    Claimed {
+        op_key: String,
+        occurrence: i64,
+    },
     /// The action's goal revision is no longer current; it was superseded.
-    StaleRevision { current: u32 },
+    StaleRevision {
+        current: u32,
+    },
     /// A pause or cancel request is in force.
     ControlHold(String),
     /// The action is not in a claimable state.
     NotClaimable(String),
     /// Another action with the same logical effect has an unestablished outcome.
-    SameEffectUnsettled { action_id: i64 },
+    SameEffectUnsettled {
+        action_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -319,17 +340,31 @@ impl RunStore {
         Ok(conn)
     }
 
-    pub fn create(dir: &Path, meta: &RunMeta, goal: &GoalSpec, inventory: &KindCounts) -> Result<RunStore> {
+    pub fn create(
+        dir: &Path,
+        meta: &RunMeta,
+        goal: &GoalSpec,
+        inventory: &KindCounts,
+    ) -> Result<RunStore> {
         let path = dir.join("run.db");
         if path.exists() {
-            bail!("run store {} already exists; refusing to overwrite", path.display());
+            bail!(
+                "run store {} already exists; refusing to overwrite",
+                path.display()
+            );
         }
         goal.validate()?;
         let mut conn = Self::open_conn(&path)?;
         conn.execute_batch(SCHEMA)?;
         let tx = conn.transaction()?;
-        tx.execute("INSERT INTO meta(key, value) VALUES ('run', ?1)", params![serde_json::to_string(meta)?])?;
-        tx.execute("INSERT INTO meta(key, value) VALUES ('schema', 'revolve.run-store/v1')", [])?;
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES ('run', ?1)",
+            params![serde_json::to_string(meta)?],
+        )?;
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES ('schema', 'revolve.run-store/v1')",
+            [],
+        )?;
         // Deterministic per scenario so handwritten plans can bind to it; unique within a run.
         let goal_id = format!("goal-{}", meta.scenario_id);
         tx.execute(
@@ -341,7 +376,10 @@ impl RunStore {
             params![serde_json::to_string(goal)?, now_ms()],
         )?;
         for (k, n) in inventory {
-            tx.execute("INSERT INTO inventory(kind, on_hand, reserved) VALUES (?1, ?2, 0)", params![k, *n as i64])?;
+            tx.execute(
+                "INSERT INTO inventory(kind, on_hand, reserved) VALUES (?1, ?2, 0)",
+                params![k, *n as i64],
+            )?;
             tx.execute(
                 "INSERT INTO ledger(op_key, entry_type, kind, delta_on_hand, delta_reserved, evidence, at_ms)
                  VALUES ('initial', 'initial', ?1, ?2, 0, 'inventory record at run start', ?3)",
@@ -353,22 +391,36 @@ impl RunStore {
             params![now_ms(), format!("run created: {} (arm {}, planner {})", goal.summary(), meta.arm, meta.planner)],
         )?;
         tx.commit()?;
-        Ok(RunStore { conn, run_id: meta.run_id.clone(), dir: dir.to_path_buf() })
+        Ok(RunStore {
+            conn,
+            run_id: meta.run_id.clone(),
+            dir: dir.to_path_buf(),
+        })
     }
 
     pub fn open(dir: &Path) -> Result<RunStore> {
         let path = dir.join("run.db");
         if !path.exists() {
-            bail!("no run store at {} (is the run id correct?)", path.display());
+            bail!(
+                "no run store at {} (is the run id correct?)",
+                path.display()
+            );
         }
         let conn = Self::open_conn(&path)?;
-        let meta: String = conn.query_row("SELECT value FROM meta WHERE key = 'run'", [], |r| r.get(0))?;
+        let meta: String =
+            conn.query_row("SELECT value FROM meta WHERE key = 'run'", [], |r| r.get(0))?;
         let meta: RunMeta = serde_json::from_str(&meta)?;
-        Ok(RunStore { conn, run_id: meta.run_id, dir: dir.to_path_buf() })
+        Ok(RunStore {
+            conn,
+            run_id: meta.run_id,
+            dir: dir.to_path_buf(),
+        })
     }
 
     pub fn meta(&self) -> Result<RunMeta> {
-        let meta: String = self.conn.query_row("SELECT value FROM meta WHERE key = 'run'", [], |r| r.get(0))?;
+        let meta: String =
+            self.conn
+                .query_row("SELECT value FROM meta WHERE key = 'run'", [], |r| r.get(0))?;
         Ok(serde_json::from_str(&meta)?)
     }
 
@@ -402,7 +454,15 @@ impl RunStore {
             params![status, reason, now_ms()],
         )?;
         if prev != status {
-            self.event("run_status", &format!("run status {prev} -> {status}{}", reason.map(|r| format!(": {r}")).unwrap_or_default()), None, None)?;
+            self.event(
+                "run_status",
+                &format!(
+                    "run status {prev} -> {status}{}",
+                    reason.map(|r| format!(": {r}")).unwrap_or_default()
+                ),
+                None,
+                None,
+            )?;
         }
         Ok(())
     }
@@ -416,7 +476,10 @@ impl RunStore {
     }
 
     pub fn add_active_ms(&self, ms: i64) -> Result<()> {
-        self.conn.execute("UPDATE run_state SET active_ms = active_ms + ?1 WHERE id = 1", params![ms])?;
+        self.conn.execute(
+            "UPDATE run_state SET active_ms = active_ms + ?1 WHERE id = 1",
+            params![ms],
+        )?;
         Ok(())
     }
 
@@ -429,19 +492,35 @@ impl RunStore {
     }
 
     pub fn set_active_plan(&self, plan_seq: Option<i64>) -> Result<()> {
-        self.conn.execute("UPDATE run_state SET active_plan_seq = ?1 WHERE id = 1", params![plan_seq])?;
+        self.conn.execute(
+            "UPDATE run_state SET active_plan_seq = ?1 WHERE id = 1",
+            params![plan_seq],
+        )?;
         Ok(())
     }
 
     pub fn bump_planner_decisions(&self) -> Result<u32> {
-        self.conn.execute("UPDATE run_state SET planner_decisions = planner_decisions + 1 WHERE id = 1", [])?;
+        self.conn.execute(
+            "UPDATE run_state SET planner_decisions = planner_decisions + 1 WHERE id = 1",
+            [],
+        )?;
         Ok(self.state()?.planner_decisions)
     }
 
     // ------------------------------------------------------------------ events
 
-    pub fn event(&self, kind: &str, message: &str, action_id: Option<i64>, data: Option<Value>) -> Result<i64> {
-        let rev: i64 = self.conn.query_row("SELECT current_goal_revision FROM run_state WHERE id = 1", [], |r| r.get(0))?;
+    pub fn event(
+        &self,
+        kind: &str,
+        message: &str,
+        action_id: Option<i64>,
+        data: Option<Value>,
+    ) -> Result<i64> {
+        let rev: i64 = self.conn.query_row(
+            "SELECT current_goal_revision FROM run_state WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )?;
         self.conn.execute(
             "INSERT INTO events(at_ms, kind, goal_revision, action_id, message, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![now_ms(), kind, rev, action_id, message, data.map(|d| d.to_string())],
@@ -471,7 +550,11 @@ impl RunStore {
     }
 
     pub fn count_events(&self, kind: &str) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM events WHERE kind = ?1", params![kind], |r| r.get(0))?)
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE kind = ?1",
+            params![kind],
+            |r| r.get(0),
+        )?)
     }
 
     // ------------------------------------------------------------------ goals & control
@@ -479,7 +562,11 @@ impl RunStore {
     pub fn goal(&self, revision: u32) -> Result<GoalSpec> {
         let s: String = self
             .conn
-            .query_row("SELECT spec FROM goal_revisions WHERE revision = ?1", params![revision as i64], |r| r.get(0))
+            .query_row(
+                "SELECT spec FROM goal_revisions WHERE revision = ?1",
+                params![revision as i64],
+                |r| r.get(0),
+            )
             .map_err(|_| Error::new(format!("no goal revision {revision}")))?;
         Ok(serde_json::from_str(&s)?)
     }
@@ -489,36 +576,70 @@ impl RunStore {
         Ok((rev, self.goal(rev)?))
     }
 
-    pub fn goal_history(&self) -> Result<Vec<(u32, GoalSpec, String, Option<String>, i64)>> {
-        let mut stmt = self.conn.prepare("SELECT revision, spec, author, reason, created_at_ms FROM goal_revisions ORDER BY revision")?;
+    pub fn goal_history(&self) -> Result<Vec<GoalRevisionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT revision, spec, author, reason, created_at_ms FROM goal_revisions ORDER BY revision",
+        )?;
         let rows = stmt
             .query_map([], |r| {
-                Ok((r.get::<_, i64>(0)? as u32, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                ))
             })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .collect::<std::result::Result<Vec<(i64, String, String, Option<String>, i64)>, _>>()?;
         rows.into_iter()
-            .map(|(rev, s, a, reason, t)| Ok((rev, serde_json::from_str(&s)?, a, reason, t)))
+            .map(|(revision, spec, author, reason, created_at_ms)| {
+                Ok(GoalRevisionRow {
+                    revision: revision as u32,
+                    spec: serde_json::from_str(&spec)?,
+                    author,
+                    reason,
+                    created_at_ms,
+                })
+            })
             .collect()
     }
 
     /// Commit a new goal revision. Committed atomically with the run's current
     /// revision pointer so that any later dispatch claim sees it (see `claim`).
-    pub fn submit_goal_revision(&mut self, spec: &GoalSpec, author: &str, reason: &str) -> Result<u32> {
+    pub fn submit_goal_revision(
+        &mut self,
+        spec: &GoalSpec,
+        author: &str,
+        reason: &str,
+    ) -> Result<u32> {
         spec.validate()?;
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (cur, status): (i64, String) =
-            tx.query_row("SELECT current_goal_revision, status FROM run_state WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (cur, status): (i64, String) = tx.query_row(
+            "SELECT current_goal_revision, status FROM run_state WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
         if is_terminal(&status) {
-            bail!("run already finished with status `{status}`; start a new run instead of correcting this one");
+            bail!(
+                "run already finished with status `{status}`; start a new run instead of correcting this one"
+            );
         }
         let next = cur + 1;
         tx.execute(
             "INSERT INTO goal_revisions(revision, spec, author, reason, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![next, serde_json::to_string(spec)?, author, reason, now_ms()],
         )?;
-        tx.execute("UPDATE run_state SET current_goal_revision = ?1, updated_at_ms = ?2 WHERE id = 1", params![next, now_ms()])?;
+        tx.execute(
+            "UPDATE run_state SET current_goal_revision = ?1, updated_at_ms = ?2 WHERE id = 1",
+            params![next, now_ms()],
+        )?;
         // Open questions against the old revision are now obsolete.
-        tx.execute("UPDATE questions SET status = 'obsolete' WHERE status = 'open' AND goal_revision < ?1", params![next])?;
+        tx.execute(
+            "UPDATE questions SET status = 'obsolete' WHERE status = 'open' AND goal_revision < ?1",
+            params![next],
+        )?;
         tx.execute(
             "INSERT INTO events(at_ms, kind, goal_revision, message, data) VALUES (?1, 'goal_revised', ?2, ?3, ?4)",
             params![now_ms(), next, format!("goal revision {next} by {author}: {} ({reason})", spec.summary()), serde_json::to_string(spec)?],
@@ -538,14 +659,30 @@ impl RunStore {
         if st.control == "cancel" && control != "cancel" {
             bail!("a cancel request is already in force; it cannot be withdrawn");
         }
-        self.conn.execute("UPDATE run_state SET control = ?1, updated_at_ms = ?2 WHERE id = 1", params![control, now_ms()])?;
-        self.event("control_requested", &format!("control request: {control}"), None, None)?;
+        self.conn.execute(
+            "UPDATE run_state SET control = ?1, updated_at_ms = ?2 WHERE id = 1",
+            params![control, now_ms()],
+        )?;
+        self.event(
+            "control_requested",
+            &format!("control request: {control}"),
+            None,
+            None,
+        )?;
         Ok(())
     }
 
     // ------------------------------------------------------------------ plans
 
-    pub fn insert_plan(&self, goal_revision: u32, world_revision: Option<u64>, proposal: &Value, planner: &str, status: &str, diagnostics: &Value) -> Result<i64> {
+    pub fn insert_plan(
+        &self,
+        goal_revision: u32,
+        world_revision: Option<u64>,
+        proposal: &Value,
+        planner: &str,
+        status: &str,
+        diagnostics: &Value,
+    ) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO plans(goal_revision, world_revision, status, proposal, planner, diagnostics, received_at_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -555,7 +692,10 @@ impl RunStore {
     }
 
     pub fn set_plan_status(&self, plan_seq: i64, status: &str) -> Result<()> {
-        self.conn.execute("UPDATE plans SET status = ?1 WHERE plan_seq = ?2", params![status, plan_seq])?;
+        self.conn.execute(
+            "UPDATE plans SET status = ?1 WHERE plan_seq = ?2",
+            params![status, plan_seq],
+        )?;
         Ok(())
     }
 
@@ -583,8 +723,16 @@ impl RunStore {
     // ------------------------------------------------------------------ actions
 
     /// Insert pending actions for a validated plan (one transaction).
-    pub fn materialize(&mut self, plan_seq: Option<i64>, origin: &str, goal_revision: u32, steps: &[(String, String, String, Value, Value)]) -> Result<Vec<i64>> {
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    pub fn materialize(
+        &mut self,
+        plan_seq: Option<i64>,
+        origin: &str,
+        goal_revision: u32,
+        steps: &[(String, String, String, Value, Value)],
+    ) -> Result<Vec<i64>> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut ids = vec![];
         for (i, (step_id, cap, ver, args, spec)) in steps.iter().enumerate() {
             tx.execute(
@@ -627,26 +775,44 @@ impl RunStore {
          resolved_arguments, descriptor, op_key, occurrence, status, attempts, result, error, claimed_at_ms, finished_at_ms";
 
     pub fn actions(&self) -> Result<Vec<ActionRow>> {
-        let mut stmt = self.conn.prepare(&format!("SELECT {} FROM actions ORDER BY action_id", Self::ACTION_COLS))?;
-        let rows = stmt.query_map([], Self::row_to_action)?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {} FROM actions ORDER BY action_id",
+            Self::ACTION_COLS
+        ))?;
+        let rows = stmt
+            .query_map([], Self::row_to_action)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
     pub fn action(&self, id: i64) -> Result<ActionRow> {
-        Ok(self
-            .conn
-            .query_row(&format!("SELECT {} FROM actions WHERE action_id = ?1", Self::ACTION_COLS), params![id], Self::row_to_action)?)
+        Ok(self.conn.query_row(
+            &format!(
+                "SELECT {} FROM actions WHERE action_id = ?1",
+                Self::ACTION_COLS
+            ),
+            params![id],
+            Self::row_to_action,
+        )?)
     }
 
     pub fn plan_actions(&self, plan_seq: i64) -> Result<Vec<ActionRow>> {
-        let mut stmt =
-            self.conn.prepare(&format!("SELECT {} FROM actions WHERE plan_seq = ?1 ORDER BY seq", Self::ACTION_COLS))?;
-        let rows = stmt.query_map(params![plan_seq], Self::row_to_action)?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {} FROM actions WHERE plan_seq = ?1 ORDER BY seq",
+            Self::ACTION_COLS
+        ))?;
+        let rows = stmt
+            .query_map(params![plan_seq], Self::row_to_action)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
     pub fn unsettled_actions(&self) -> Result<Vec<ActionRow>> {
-        Ok(self.actions()?.into_iter().filter(|a| UNSETTLED.contains(&a.status.as_str())).collect())
+        Ok(self
+            .actions()?
+            .into_iter()
+            .filter(|a| UNSETTLED.contains(&a.status.as_str()))
+            .collect())
     }
 
     /// The dispatch claim. One IMMEDIATE transaction that:
@@ -660,11 +826,23 @@ impl RunStore {
     /// claim committed first is in flight and must be reconciled after the correction.
     /// `cleanup` permits local bookkeeping (e.g. releasing reservations) while a
     /// cancel is being processed; physical actions never pass `cleanup = true`.
-    pub fn claim(&mut self, action_id: i64, resolved_args: &Value, descriptor: &str, scheme: KeyScheme, cleanup: bool) -> Result<ClaimResult> {
+    pub fn claim(
+        &mut self,
+        action_id: i64,
+        resolved_args: &Value,
+        descriptor: &str,
+        scheme: KeyScheme,
+        cleanup: bool,
+    ) -> Result<ClaimResult> {
         let run_id = self.run_id.clone();
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (cur_rev, control): (i64, String) =
-            tx.query_row("SELECT current_goal_revision, control FROM run_state WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (cur_rev, control): (i64, String) = tx.query_row(
+            "SELECT current_goal_revision, control FROM run_state WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
         if control != "run" && !(cleanup && control == "cancel") {
             return Ok(ClaimResult::ControlHold(control));
         }
@@ -686,7 +864,9 @@ impl RunStore {
                 params![now_ms(), cur_rev, action_id, format!("action from goal revision {rev} not dispatched: current revision is {cur_rev}")],
             )?;
             tx.commit()?;
-            return Ok(ClaimResult::StaleRevision { current: cur_rev as u32 });
+            return Ok(ClaimResult::StaleRevision {
+                current: cur_rev as u32,
+            });
         }
         let (op_key, occ) = if let (Some(k), Some(o)) = (existing_key, occurrence) {
             // Retry under the same identity.
@@ -698,18 +878,28 @@ impl RunStore {
                         "SELECT action_id, status FROM actions WHERE descriptor = ?1 AND op_key IS NOT NULL AND action_id != ?2",
                     )?;
                     let prior: Vec<(i64, String)> = stmt
-                        .query_map(params![descriptor, action_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+                        .query_map(params![descriptor, action_id], |r| {
+                            Ok((r.get(0)?, r.get(1)?))
+                        })?
                         .collect::<std::result::Result<_, _>>()?;
                     drop(stmt);
-                    if let Some((aid, _)) = prior.iter().find(|(_, s)| UNSETTLED.contains(&s.as_str())) {
+                    if let Some((aid, _)) =
+                        prior.iter().find(|(_, s)| UNSETTLED.contains(&s.as_str()))
+                    {
                         return Ok(ClaimResult::SameEffectUnsettled { action_id: *aid });
                     }
                     let occ = prior.len() as i64;
-                    let key = format!("op-{}", &sha256_hex(format!("{run_id}|{descriptor}|{occ}").as_bytes())[..20]);
+                    let key = format!(
+                        "op-{}",
+                        &sha256_hex(format!("{run_id}|{descriptor}|{occ}").as_bytes())[..20]
+                    );
                     (key, occ)
                 }
                 KeyScheme::PerCall => {
-                    let key = format!("op-{}", &sha256_hex(format!("{run_id}|call|{action_id}").as_bytes())[..20]);
+                    let key = format!(
+                        "op-{}",
+                        &sha256_hex(format!("{run_id}|call|{action_id}").as_bytes())[..20]
+                    );
                     (key, 0)
                 }
             }
@@ -724,11 +914,24 @@ impl RunStore {
             params![now_ms(), cur_rev, action_id, format!("dispatch recorded under {op_key}")],
         )?;
         tx.commit()?;
-        Ok(ClaimResult::Claimed { op_key, occurrence: occ })
+        Ok(ClaimResult::Claimed {
+            op_key,
+            occurrence: occ,
+        })
     }
 
-    pub fn set_action_status(&self, action_id: i64, status: &str, result: Option<&Value>, error: Option<&str>) -> Result<()> {
-        let finished = if UNSETTLED.contains(&status) || status == A_PENDING { None } else { Some(now_ms()) };
+    pub fn set_action_status(
+        &self,
+        action_id: i64,
+        status: &str,
+        result: Option<&Value>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let finished = if UNSETTLED.contains(&status) || status == A_PENDING {
+            None
+        } else {
+            Some(now_ms())
+        };
         self.conn.execute(
             "UPDATE actions SET status = ?1, result = COALESCE(?2, result), error = ?3, finished_at_ms = ?4 WHERE action_id = ?5",
             params![status, result.map(|r| r.to_string()), error, finished, action_id],
@@ -746,7 +949,14 @@ impl RunStore {
 
     // ------------------------------------------------------------------ questions & facts
 
-    pub fn ask(&self, goal_revision: u32, kind: &str, prompt: &str, options: &[QuestionOption], context: &Value) -> Result<i64> {
+    pub fn ask(
+        &self,
+        goal_revision: u32,
+        kind: &str,
+        prompt: &str,
+        options: &[QuestionOption],
+        context: &Value,
+    ) -> Result<i64> {
         // Do not ask the same open question twice.
         if let Some(id) = self
             .conn
@@ -764,7 +974,12 @@ impl RunStore {
             params![goal_revision as i64, kind, prompt, serde_json::to_string(options)?, context.to_string(), now_ms()],
         )?;
         let id = self.conn.last_insert_rowid();
-        self.event("question_asked", &format!("question #{id}: {prompt}"), None, Some(json!({"question_id": id, "kind": kind})))?;
+        self.event(
+            "question_asked",
+            &format!("question #{id}: {prompt}"),
+            None,
+            Some(json!({"question_id": id, "kind": kind})),
+        )?;
         Ok(id)
     }
 
@@ -790,7 +1005,11 @@ impl RunStore {
     }
 
     pub fn open_questions(&self) -> Result<Vec<QuestionRow>> {
-        Ok(self.questions()?.into_iter().filter(|q| q.status == "open").collect())
+        Ok(self
+            .questions()?
+            .into_iter()
+            .filter(|q| q.status == "open")
+            .collect())
     }
 
     /// Answer a question. Substitution/rework decisions become a new goal revision;
@@ -802,20 +1021,36 @@ impl RunStore {
             .find(|q| q.question_id == question_id)
             .ok_or_else(|| Error::new(format!("no question #{question_id}")))?;
         if q.status != "open" {
-            bail!("question #{question_id} is {} and cannot be answered", q.status);
+            bail!(
+                "question #{question_id} is {} and cannot be answered",
+                q.status
+            );
         }
         if !q.options.iter().any(|o| o.id == choice) {
             let ids: Vec<&str> = q.options.iter().map(|o| o.id.as_str()).collect();
-            bail!("`{choice}` is not an option for question #{question_id} (options: {})", ids.join(", "));
+            bail!(
+                "`{choice}` is not an option for question #{question_id} (options: {})",
+                ids.join(", ")
+            );
         }
         self.conn.execute(
             "UPDATE questions SET status = 'answered', answer = ?1, answered_at_ms = ?2 WHERE question_id = ?3",
             params![choice, now_ms(), question_id],
         )?;
-        self.event("question_answered", &format!("question #{question_id} answered by {author}: {choice}"), None, Some(json!({"question_id": question_id, "choice": choice})))?;
+        self.event(
+            "question_answered",
+            &format!("question #{question_id} answered by {author}: {choice}"),
+            None,
+            Some(json!({"question_id": question_id, "choice": choice})),
+        )?;
         let outcome = match q.kind.as_str() {
             "classification" => {
-                let obj = q.context.get("object_id").and_then(Value::as_str).unwrap_or_default().to_string();
+                let obj = q
+                    .context
+                    .get("object_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
                 self.conn.execute(
                     "INSERT INTO facts(kind, subject, value, provenance, at_ms) VALUES ('classification', ?1, ?2, ?3, ?4)",
                     params![obj, choice, format!("{author} (question #{question_id})"), now_ms()],
@@ -825,21 +1060,42 @@ impl RunStore {
             "substitution" => {
                 let (_, mut goal) = self.current_goal()?;
                 let sub = Substitution {
-                    replace: q.context.get("replace").and_then(Value::as_str).unwrap_or_default().into(),
-                    with: q.context.get("with").and_then(Value::as_str).unwrap_or_default().into(),
+                    replace: q
+                        .context
+                        .get("replace")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .into(),
+                    with: q
+                        .context
+                        .get("with")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .into(),
                 };
                 if choice == "approve" {
                     goal.approved_substitutions.push(sub.clone());
                 } else {
                     goal.declined_substitutions.push(sub.clone());
                 }
-                let rev = self.submit_goal_revision(&goal, author, &format!("answer to question #{question_id}: {choice} substitution {} -> {}", sub.replace, sub.with))?;
+                let rev = self.submit_goal_revision(
+                    &goal,
+                    author,
+                    &format!(
+                        "answer to question #{question_id}: {choice} substitution {} -> {}",
+                        sub.replace, sub.with
+                    ),
+                )?;
                 format!("goal revision {rev}")
             }
             "rework" => {
                 let (_, mut goal) = self.current_goal()?;
                 goal.rework_permitted = Some(choice == "approve");
-                let rev = self.submit_goal_revision(&goal, author, &format!("answer to question #{question_id}: rework {choice}"))?;
+                let rev = self.submit_goal_revision(
+                    &goal,
+                    author,
+                    &format!("answer to question #{question_id}: rework {choice}"),
+                )?;
                 format!("goal revision {rev}")
             }
             _ => "answer recorded".into(),
@@ -850,7 +1106,13 @@ impl RunStore {
     pub fn classifications(&self) -> Result<Vec<Classification>> {
         let mut stmt = self.conn.prepare("SELECT subject, value, provenance FROM facts WHERE kind = 'classification' ORDER BY fact_id")?;
         let rows = stmt
-            .query_map([], |r| Ok(Classification { object_id: r.get(0)?, kind: r.get(1)?, provenance: r.get(2)? }))?
+            .query_map([], |r| {
+                Ok(Classification {
+                    object_id: r.get(0)?,
+                    kind: r.get(1)?,
+                    provenance: r.get(2)?,
+                })
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -884,13 +1146,25 @@ impl RunStore {
     }
 
     pub fn count_observations(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM observations", [], |r| r.get(0))?)
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM observations", [], |r| r.get(0))?)
     }
 
     // ------------------------------------------------------------------ planner call accounting
 
     #[allow(clippy::too_many_arguments)]
-    pub fn record_planner_call(&self, arm: &str, planner: &str, goal_revision: u32, outcome: &str, latency_ms: i64, transport_attempts: u32, usage: Option<(u64, u64)>, detail: Option<&Value>) -> Result<()> {
+    pub fn record_planner_call(
+        &self,
+        arm: &str,
+        planner: &str,
+        goal_revision: u32,
+        outcome: &str,
+        latency_ms: i64,
+        transport_attempts: u32,
+        usage: Option<(u64, u64)>,
+        detail: Option<&Value>,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO planner_calls(at_ms, arm, planner, goal_revision, outcome, latency_ms, transport_attempts, input_tokens, output_tokens, detail)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -909,7 +1183,9 @@ impl RunStore {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )?;
         let mut by_outcome = serde_json::Map::new();
-        let mut stmt = self.conn.prepare("SELECT outcome, COUNT(*) FROM planner_calls GROUP BY outcome")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT outcome, COUNT(*) FROM planner_calls GROUP BY outcome")?;
         for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
             let (o, c) = row?;
             by_outcome.insert(o, json!(c));
@@ -925,7 +1201,11 @@ impl RunStore {
 /// classification) plus a unit in the gripper not recorded as consumed (in
 /// transit from stock). Unclassified items are not counted; kinds whose bin or
 /// the gripper is withheld are omitted.
-pub fn available_stock(obs: &Observation, classes: &[Classification], consumed: &[String]) -> KindCounts {
+pub fn available_stock(
+    obs: &Observation,
+    classes: &[Classification],
+    consumed: &[String],
+) -> KindCounts {
     let mut counts = KindCounts::new();
     if obs.is_withheld(crate::model::GRIPPER) {
         return counts;
@@ -935,11 +1215,15 @@ pub fn available_stock(obs: &Observation, classes: &[Classification], consumed: 
         if obs.is_withheld(&bin) {
             continue;
         }
-        let mut n = obs.objects_at(&bin).filter(|o| crate::model::effective_kind(o, classes) == *k).count() as u32;
-        if let Some(g) = obs.gripper_contents() {
-            if crate::model::effective_kind(g, classes) == *k && !consumed.iter().any(|c| c == &g.object_id) {
-                n += 1;
-            }
+        let mut n = obs
+            .objects_at(&bin)
+            .filter(|o| crate::model::effective_kind(o, classes) == *k)
+            .count() as u32;
+        if let Some(g) = obs.gripper_contents()
+            && crate::model::effective_kind(g, classes) == *k
+            && !consumed.iter().any(|c| c == &g.object_id)
+        {
+            n += 1;
         }
         counts.insert(k.to_string(), n);
     }
@@ -950,7 +1234,11 @@ pub fn available_stock(obs: &Observation, classes: &[Classification], consumed: 
 /// known parts not yet recorded as consumed, wherever they are in the workspace
 /// (stock bin, gripper, or placed in a tray awaiting its consumption record).
 /// Returns an empty map if any location is withheld (cannot be established).
-pub fn unconsumed_counts(obs: &Observation, classes: &[Classification], consumed: &[String]) -> KindCounts {
+pub fn unconsumed_counts(
+    obs: &Observation,
+    classes: &[Classification],
+    consumed: &[String],
+) -> KindCounts {
     let mut counts = KindCounts::new();
     if !obs.withheld.is_empty() {
         return counts;
@@ -964,8 +1252,12 @@ pub fn unconsumed_counts(obs: &Observation, classes: &[Classification], consumed
             continue;
         }
         let in_place = match obs.location(&o.location_id).map(|l| l.loc_type) {
-            Some(crate::model::LocationType::Bin) => o.location_id == crate::model::bin_for_kind(&k),
-            Some(crate::model::LocationType::Tray) | Some(crate::model::LocationType::Gripper) => true,
+            Some(crate::model::LocationType::Bin) => {
+                o.location_id == crate::model::bin_for_kind(&k)
+            }
+            Some(crate::model::LocationType::Tray) | Some(crate::model::LocationType::Gripper) => {
+                true
+            }
             _ => false,
         };
         if in_place {
@@ -987,11 +1279,19 @@ pub struct OwnerLock {
 impl OwnerLock {
     pub fn acquire(run_dir: &Path) -> Result<OwnerLock> {
         let path = run_dir.join("executor.lock");
-        let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)?;
         match file.try_lock() {
             Ok(()) => Ok(OwnerLock { _file: file }),
             Err(std::fs::TryLockError::WouldBlock) => {
-                bail!("run {} is owned by another executor process (lock {} is held)", run_dir.display(), path.display())
+                bail!(
+                    "run {} is owned by another executor process (lock {} is held)",
+                    run_dir.display(),
+                    path.display()
+                )
             }
             Err(std::fs::TryLockError::Error(e)) => bail!("could not lock {}: {e}", path.display()),
         }
@@ -1000,7 +1300,12 @@ impl OwnerLock {
     /// Whether some process currently owns the run (probe without keeping the lock).
     pub fn is_held(run_dir: &Path) -> bool {
         let path = run_dir.join("executor.lock");
-        let Ok(file) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path) else {
+        let Ok(file) = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+        else {
             return false;
         };
         match file.try_lock() {

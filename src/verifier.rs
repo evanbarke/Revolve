@@ -6,7 +6,9 @@
 
 use crate::inventory::InventoryView;
 use crate::ir::KitAssignment;
-use crate::model::{effective_kind, evaluate_kit, Classification, GoalSpec, KindCounts, Observation, GRIPPER};
+use crate::model::{
+    Classification, GRIPPER, GoalSpec, KindCounts, Observation, effective_kind, evaluate_kit,
+};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,20 +56,36 @@ pub fn verify(
     let mut complete = vec![];
     let mut notes = vec![];
     let mut tray_views = obs.trays();
-    tray_views.sort_by_key(|t| t.location_id.rsplit('-').next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(u32::MAX));
+    tray_views.sort_by_key(|t| {
+        t.location_id
+            .rsplit('-')
+            .next()
+            .and_then(|n| n.parse::<u32>().ok())
+            .unwrap_or(u32::MAX)
+    });
     for t in tray_views {
-        let objects: Vec<String> = obs.objects_at(&t.location_id).map(|o| o.object_id.clone()).collect();
+        let objects: Vec<String> = obs
+            .objects_at(&t.location_id)
+            .map(|o| o.object_id.clone())
+            .collect();
         let mut contents = KindCounts::new();
         for o in obs.objects_at(&t.location_id) {
             *contents.entry(effective_kind(o, classes)).or_default() += 1;
         }
         let (ok, missing, excess) = evaluate_kit(&contents, goal);
-        let kit = assignments.iter().find(|a| a.tray_id == t.location_id).map(|a| a.kit);
+        let kit = assignments
+            .iter()
+            .find(|a| a.tray_id == t.location_id)
+            .map(|a| a.kit);
         if ok && !objects.is_empty() {
             complete.push(t.location_id.clone());
         }
         if !t.available && !objects.is_empty() {
-            notes.push(format!("{} is unavailable and holds {}", t.location_id, objects.join(", ")));
+            notes.push(format!(
+                "{} is unavailable and holds {}",
+                t.location_id,
+                objects.join(", ")
+            ));
         }
         trays.push(TrayReport {
             tray_id: t.location_id.clone(),
@@ -97,7 +115,12 @@ pub fn verify(
     // What is still missing to finish the remaining kits.
     let remaining = q.saturating_sub(complete.len());
     let mut needed = KindCounts::new();
-    let mut partials: Vec<&TrayReport> = trays.iter().filter(|t| !t.matches_composition && t.available && t.excess.is_empty() && !t.objects.is_empty()).collect();
+    let mut partials: Vec<&TrayReport> = trays
+        .iter()
+        .filter(|t| {
+            !t.matches_composition && t.available && t.excess.is_empty() && !t.objects.is_empty()
+        })
+        .collect();
     partials.truncate(remaining);
     for t in &partials {
         for (k, n) in &t.missing {
@@ -113,7 +136,11 @@ pub fn verify(
     for (k, n) in &needed {
         let mut have = stock.get(k).copied().unwrap_or(0);
         for s in goal.substitute_for(k) {
-            let spare = stock.get(&s).copied().unwrap_or(0).saturating_sub(needed.get(&s).copied().unwrap_or(0));
+            let spare = stock
+                .get(&s)
+                .copied()
+                .unwrap_or(0)
+                .saturating_sub(needed.get(&s).copied().unwrap_or(0));
             have += spare;
         }
         if *n > have {
@@ -129,7 +156,10 @@ pub fn verify(
             }
         }
     } else {
-        notes.push(format!("observation withheld for {}; inventory not verified", obs.withheld.join(", ")));
+        notes.push(format!(
+            "observation withheld for {}; inventory not verified",
+            obs.withheld.join(", ")
+        ));
     }
     let gripper = obs.objects_at(GRIPPER).next().map(|o| o.object_id.clone());
     if let Some(g) = &gripper {

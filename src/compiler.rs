@@ -11,15 +11,19 @@
 //! 7. Feasibility: abstract execution of every step's contract semantics against
 //!    the planner's observed snapshot, checking declared pre/postconditions,
 //!    stock/reservation arithmetic, and that claimed kit outcomes follow.
+//!
 //! The output is a deterministic dispatch order. A compiled plan is still only
 //! a belief-level check: the runtime re-checks preconditions against fresh
 //! observations and the verifier checks reality afterwards.
 
-use crate::capability::{self, counts_from_value, ArgType, Contract};
+use crate::capability::{self, ArgType, Contract, counts_from_value};
 use crate::inventory::InventoryView;
-use crate::ir::{ArgValue, Condition, PlanHeader, PlanProposal, Step, ACTION_IR_VERSION, RUNTIME_OWNED_FIELDS};
+use crate::ir::{
+    ACTION_IR_VERSION, ArgValue, Condition, PlanHeader, PlanProposal, RUNTIME_OWNED_FIELDS, Step,
+};
 use crate::model::{
-    bin_for_kind, effective_kind, evaluate_kit, Classification, GoalSpec, KindCounts, LocationType, Observation, GRIPPER,
+    Classification, GRIPPER, GoalSpec, KindCounts, LocationType, Observation, bin_for_kind,
+    effective_kind, evaluate_kit,
 };
 use crate::policy::Policy;
 use serde::Serialize;
@@ -59,8 +63,18 @@ impl std::fmt::Display for Diagnostic {
     }
 }
 
-fn diag(category: DiagCategory, step: Option<&str>, path: impl Into<String>, message: impl Into<String>) -> Diagnostic {
-    Diagnostic { category, step_id: step.map(String::from), path: path.into(), message: message.into() }
+fn diag(
+    category: DiagCategory,
+    step: Option<&str>,
+    path: impl Into<String>,
+    message: impl Into<String>,
+) -> Diagnostic {
+    Diagnostic {
+        category,
+        step_id: step.map(String::from),
+        path: path.into(),
+        message: message.into(),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -73,7 +87,12 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_actions: 120, max_planner_decisions: 12, max_elapsed_ms: 10 * 60 * 1000, max_repairs_per_episode: 3 }
+        Limits {
+            max_actions: 120,
+            max_planner_decisions: 12,
+            max_elapsed_ms: 10 * 60 * 1000,
+            max_repairs_per_episode: 3,
+        }
     }
 }
 
@@ -98,7 +117,10 @@ pub struct CompiledPlan {
 }
 
 fn is_id(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 80 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    !s.is_empty()
+        && s.len() <= 80
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Parse untrusted JSON into a proposal. Steps are parsed one by one so errors
@@ -106,21 +128,39 @@ fn is_id(s: &str) -> bool {
 pub fn parse_proposal(v: &Value) -> Result<PlanProposal, Vec<Diagnostic>> {
     let mut diags = vec![];
     let Some(obj) = v.as_object() else {
-        return Err(vec![diag(DiagCategory::Syntax, None, "$", "plan must be a JSON object")]);
+        return Err(vec![diag(
+            DiagCategory::Syntax,
+            None,
+            "$",
+            "plan must be a JSON object",
+        )]);
     };
     for k in obj.keys() {
         if RUNTIME_OWNED_FIELDS.contains(&k.as_str()) {
-            diags.push(diag(DiagCategory::Authorization, None, format!("$.{k}"), format!("`{k}` is runtime-owned and cannot be supplied by a planner")));
+            diags.push(diag(
+                DiagCategory::Authorization,
+                None,
+                format!("$.{k}"),
+                format!("`{k}` is runtime-owned and cannot be supplied by a planner"),
+            ));
         }
     }
     let mut header_obj = obj.clone();
     let steps_v = header_obj.remove("steps");
     let header: Option<PlanHeader> = match serde_json::from_value(Value::Object(
-        header_obj.into_iter().filter(|(k, _)| !RUNTIME_OWNED_FIELDS.contains(&k.as_str())).collect(),
+        header_obj
+            .into_iter()
+            .filter(|(k, _)| !RUNTIME_OWNED_FIELDS.contains(&k.as_str()))
+            .collect(),
     )) {
         Ok(h) => Some(h),
         Err(e) => {
-            diags.push(diag(DiagCategory::Syntax, None, "$", format!("plan header: {e}")));
+            diags.push(diag(
+                DiagCategory::Syntax,
+                None,
+                "$",
+                format!("plan header: {e}"),
+            ));
             None
         }
     };
@@ -133,22 +173,49 @@ pub fn parse_proposal(v: &Value) -> Result<PlanProposal, Vec<Diagnostic>> {
                 if let Some(o) = s.as_object() {
                     for k in o.keys() {
                         if RUNTIME_OWNED_FIELDS.contains(&k.as_str()) {
-                            diags.push(diag(DiagCategory::Authorization, sid.as_deref(), format!("{path}.{k}"), format!("`{k}` is runtime-owned and cannot be supplied by a planner")));
+                            diags.push(diag(
+                                DiagCategory::Authorization,
+                                sid.as_deref(),
+                                format!("{path}.{k}"),
+                                format!(
+                                    "`{k}` is runtime-owned and cannot be supplied by a planner"
+                                ),
+                            ));
                         }
                     }
                 }
                 let cleaned = match s.as_object() {
-                    Some(o) => Value::Object(o.iter().filter(|(k, _)| !RUNTIME_OWNED_FIELDS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()),
+                    Some(o) => Value::Object(
+                        o.iter()
+                            .filter(|(k, _)| !RUNTIME_OWNED_FIELDS.contains(&k.as_str()))
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                    ),
                     None => s.clone(),
                 };
                 match serde_json::from_value::<Step>(cleaned) {
                     Ok(st) => steps.push(st),
-                    Err(e) => diags.push(diag(DiagCategory::Syntax, sid.as_deref(), path, format!("{e}"))),
+                    Err(e) => diags.push(diag(
+                        DiagCategory::Syntax,
+                        sid.as_deref(),
+                        path,
+                        format!("{e}"),
+                    )),
                 }
             }
         }
-        Some(_) => diags.push(diag(DiagCategory::Syntax, None, "$.steps", "`steps` must be an array")),
-        None => diags.push(diag(DiagCategory::Syntax, None, "$.steps", "missing `steps`")),
+        Some(_) => diags.push(diag(
+            DiagCategory::Syntax,
+            None,
+            "$.steps",
+            "`steps` must be an array",
+        )),
+        None => diags.push(diag(
+            DiagCategory::Syntax,
+            None,
+            "$.steps",
+            "missing `steps`",
+        )),
     }
     match (header, diags.is_empty()) {
         (Some(h), true) => Ok(PlanProposal { header: h, steps }),
@@ -162,7 +229,15 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
 
     // ---- 2. schema
     if h.schema_version != ACTION_IR_VERSION {
-        d.push(diag(DiagCategory::Schema, None, "$.schema_version", format!("unsupported schema `{}` (expected `{ACTION_IR_VERSION}`)", h.schema_version)));
+        d.push(diag(
+            DiagCategory::Schema,
+            None,
+            "$.schema_version",
+            format!(
+                "unsupported schema `{}` (expected `{ACTION_IR_VERSION}`)",
+                h.schema_version
+            ),
+        ));
         return Err(d);
     }
     let mut contracts: HashMap<String, Contract> = HashMap::new();
@@ -170,28 +245,77 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
         let path = format!("$.steps[{i}]");
         let sid = Some(s.step_id.as_str());
         let Some(c) = capability::lookup(&s.capability) else {
-            d.push(diag(DiagCategory::Schema, sid, format!("{path}.capability"), format!("unknown capability `{}`", s.capability)));
+            d.push(diag(
+                DiagCategory::Schema,
+                sid,
+                format!("{path}.capability"),
+                format!("unknown capability `{}`", s.capability),
+            ));
             continue;
         };
         if !c.plan_step_allowed {
-            d.push(diag(DiagCategory::Schema, sid, format!("{path}.capability"), format!("`{}` cannot be used as a plan step", s.capability)));
+            d.push(diag(
+                DiagCategory::Schema,
+                sid,
+                format!("{path}.capability"),
+                format!("`{}` cannot be used as a plan step", s.capability),
+            ));
         }
         if s.capability_version != c.version {
-            d.push(diag(DiagCategory::Schema, sid, format!("{path}.capability_version"), format!("`{}` version `{}` is not registered (registered: `{}`)", s.capability, s.capability_version, c.version)));
+            d.push(diag(
+                DiagCategory::Schema,
+                sid,
+                format!("{path}.capability_version"),
+                format!(
+                    "`{}` version `{}` is not registered (registered: `{}`)",
+                    s.capability, s.capability_version, c.version
+                ),
+            ));
         }
         match h.capabilities.get(&s.capability) {
-            None => d.push(diag(DiagCategory::Schema, sid, "$.capabilities", format!("capability `{}` used by step but not listed in `capabilities`", s.capability))),
-            Some(v) if *v != s.capability_version => d.push(diag(DiagCategory::Schema, sid, "$.capabilities", format!("`capabilities` lists `{}` version `{v}` but the step uses `{}`", s.capability, s.capability_version))),
+            None => d.push(diag(
+                DiagCategory::Schema,
+                sid,
+                "$.capabilities",
+                format!(
+                    "capability `{}` used by step but not listed in `capabilities`",
+                    s.capability
+                ),
+            )),
+            Some(v) if *v != s.capability_version => d.push(diag(
+                DiagCategory::Schema,
+                sid,
+                "$.capabilities",
+                format!(
+                    "`capabilities` lists `{}` version `{v}` but the step uses `{}`",
+                    s.capability, s.capability_version
+                ),
+            )),
             _ => {}
         }
         for spec in &c.args {
             match s.arguments.get(spec.name) {
-                None => d.push(diag(DiagCategory::Schema, sid, format!("{path}.arguments"), format!("missing argument `{}` ({:?})", spec.name, spec.ty))),
+                None => d.push(diag(
+                    DiagCategory::Schema,
+                    sid,
+                    format!("{path}.arguments"),
+                    format!("missing argument `{}` ({:?})", spec.name, spec.ty),
+                )),
                 Some(v) => match ArgValue::parse(v) {
-                    Err(e) => d.push(diag(DiagCategory::Schema, sid, format!("{path}.arguments.{}", spec.name), e)),
+                    Err(e) => d.push(diag(
+                        DiagCategory::Schema,
+                        sid,
+                        format!("{path}.arguments.{}", spec.name),
+                        e,
+                    )),
                     Ok(ArgValue::Literal(lit)) => {
                         if let Err(e) = spec.ty.check(&lit) {
-                            d.push(diag(DiagCategory::Schema, sid, format!("{path}.arguments.{}", spec.name), e));
+                            d.push(diag(
+                                DiagCategory::Schema,
+                                sid,
+                                format!("{path}.arguments.{}", spec.name),
+                                e,
+                            ));
                         }
                     }
                     Ok(ArgValue::Ref { .. }) => {}
@@ -200,7 +324,12 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
         }
         for k in s.arguments.keys() {
             if c.arg(k).is_none() {
-                d.push(diag(DiagCategory::Schema, sid, format!("{path}.arguments.{k}"), format!("unknown argument `{k}` for `{}`", s.capability)));
+                d.push(diag(
+                    DiagCategory::Schema,
+                    sid,
+                    format!("{path}.arguments.{k}"),
+                    format!("unknown argument `{k}` for `{}`", s.capability),
+                ));
             }
         }
         contracts.insert(s.step_id.clone(), c);
@@ -213,18 +342,38 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
     let mut index: HashMap<&str, usize> = HashMap::new();
     for (i, s) in p.steps.iter().enumerate() {
         if !is_id(&s.step_id) {
-            d.push(diag(DiagCategory::Structure, Some(&s.step_id), format!("$.steps[{i}].step_id"), "step_id must be 1-80 chars of [A-Za-z0-9_-]"));
+            d.push(diag(
+                DiagCategory::Structure,
+                Some(&s.step_id),
+                format!("$.steps[{i}].step_id"),
+                "step_id must be 1-80 chars of [A-Za-z0-9_-]",
+            ));
         }
         if index.insert(s.step_id.as_str(), i).is_some() {
-            d.push(diag(DiagCategory::Structure, Some(&s.step_id), format!("$.steps[{i}].step_id"), format!("duplicate step_id `{}`", s.step_id)));
+            d.push(diag(
+                DiagCategory::Structure,
+                Some(&s.step_id),
+                format!("$.steps[{i}].step_id"),
+                format!("duplicate step_id `{}`", s.step_id),
+            ));
         }
     }
     for (i, s) in p.steps.iter().enumerate() {
         for dep in &s.depends_on {
             if dep == &s.step_id {
-                d.push(diag(DiagCategory::Structure, Some(&s.step_id), format!("$.steps[{i}].depends_on"), "a step cannot depend on itself"));
+                d.push(diag(
+                    DiagCategory::Structure,
+                    Some(&s.step_id),
+                    format!("$.steps[{i}].depends_on"),
+                    "a step cannot depend on itself",
+                ));
             } else if !index.contains_key(dep.as_str()) {
-                d.push(diag(DiagCategory::Structure, Some(&s.step_id), format!("$.steps[{i}].depends_on"), format!("unknown dependency `{dep}`")));
+                d.push(diag(
+                    DiagCategory::Structure,
+                    Some(&s.step_id),
+                    format!("$.steps[{i}].depends_on"),
+                    format!("unknown dependency `{dep}`"),
+                ));
             }
         }
     }
@@ -263,14 +412,28 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
         while !seen.contains_key(&cur) {
             seen.insert(cur, path.len());
             path.push(cur);
-            cur = p.steps[cur].depends_on.iter().map(|d| index[d.as_str()]).find(|j| stuck.contains(j)).unwrap_or(cur);
+            cur = p.steps[cur]
+                .depends_on
+                .iter()
+                .map(|d| index[d.as_str()])
+                .find(|j| stuck.contains(j))
+                .unwrap_or(cur);
         }
-        let cycle: Vec<&str> = path[seen[&cur]..].iter().rev().map(|&i| p.steps[i].step_id.as_str()).collect();
+        let cycle: Vec<&str> = path[seen[&cur]..]
+            .iter()
+            .rev()
+            .map(|&i| p.steps[i].step_id.as_str())
+            .collect();
         d.push(diag(
             DiagCategory::Structure,
             Some(cycle[0]),
             "$.steps",
-            format!("dependency cycle: {} -> {} ({} step(s) cannot be scheduled)", cycle.join(" -> "), cycle[0], stuck.len()),
+            format!(
+                "dependency cycle: {} -> {} ({} step(s) cannot be scheduled)",
+                cycle.join(" -> "),
+                cycle[0],
+                stuck.len()
+            ),
         ));
         return Err(d);
     }
@@ -292,7 +455,12 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
             if let Ok(ArgValue::Ref { step_id, output }) = ArgValue::parse(v) {
                 let path = format!("$.steps[{i}].arguments.{name}");
                 let Some(&j) = index.get(step_id.as_str()) else {
-                    d.push(diag(DiagCategory::Structure, Some(&s.step_id), path, format!("reference to unknown step `{step_id}`")));
+                    d.push(diag(
+                        DiagCategory::Structure,
+                        Some(&s.step_id),
+                        path,
+                        format!("reference to unknown step `{step_id}`"),
+                    ));
                     continue;
                 };
                 if !ancestors[i].contains(&j) {
@@ -300,7 +468,12 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
                 }
                 let src = &contracts[&p.steps[j].step_id];
                 match src.output(&output) {
-                    None => d.push(diag(DiagCategory::Structure, Some(&s.step_id), path, format!("`{}` has no output `{output}`", src.id))),
+                    None => d.push(diag(
+                        DiagCategory::Structure,
+                        Some(&s.step_id),
+                        path,
+                        format!("`{}` has no output `{output}`", src.id),
+                    )),
                     Some(o) => {
                         let want = c.arg(name).map(|a| a.ty);
                         if want != Some(o.ty) {
@@ -316,23 +489,28 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
         .steps
         .iter()
         .map(|s| {
-            let m: serde_json::Map<String, Value> = s.arguments.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let m: serde_json::Map<String, Value> = s
+                .arguments
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             capability::exclusive_resources(&s.capability, &m)
         })
         .collect();
     'outer: for a in 0..n {
         for b in (a + 1)..n {
-            if let Some(r) = resources[a].iter().find(|r| resources[b].contains(r)) {
-                if !ancestors[a].contains(&b) && !ancestors[b].contains(&a) {
-                    d.push(diag(
+            if let Some(r) = resources[a].iter().find(|r| resources[b].contains(r))
+                && !ancestors[a].contains(&b)
+                && !ancestors[b].contains(&a)
+            {
+                d.push(diag(
                         DiagCategory::Structure,
                         Some(&p.steps[b].step_id),
                         format!("$.steps[{b}].depends_on"),
                         format!("steps `{}` and `{}` both use exclusive resource `{r}` but neither depends on the other", p.steps[a].step_id, p.steps[b].step_id),
                     ));
-                    if d.len() > 20 {
-                        break 'outer;
-                    }
+                if d.len() > 20 {
+                    break 'outer;
                 }
             }
         }
@@ -343,13 +521,37 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
 
     // ---- 4. binding / staleness
     if h.goal_id != ctx.goal_id {
-        d.push(diag(DiagCategory::Stale, None, "$.goal_id", format!("plan is for goal `{}` but this run's goal is `{}`", h.goal_id, ctx.goal_id)));
+        d.push(diag(
+            DiagCategory::Stale,
+            None,
+            "$.goal_id",
+            format!(
+                "plan is for goal `{}` but this run's goal is `{}`",
+                h.goal_id, ctx.goal_id
+            ),
+        ));
     }
     if h.goal_revision != ctx.goal_revision {
-        d.push(diag(DiagCategory::Stale, None, "$.goal_revision", format!("plan targets goal revision {} but the current revision is {}", h.goal_revision, ctx.goal_revision)));
+        d.push(diag(
+            DiagCategory::Stale,
+            None,
+            "$.goal_revision",
+            format!(
+                "plan targets goal revision {} but the current revision is {}",
+                h.goal_revision, ctx.goal_revision
+            ),
+        ));
     }
     if h.basis.world_revision != ctx.observation.world_revision {
-        d.push(diag(DiagCategory::Stale, None, "$.basis.world_revision", format!("plan is based on world revision {} but the planning snapshot is revision {}", h.basis.world_revision, ctx.observation.world_revision)));
+        d.push(diag(
+            DiagCategory::Stale,
+            None,
+            "$.basis.world_revision",
+            format!(
+                "plan is based on world revision {} but the planning snapshot is revision {}",
+                h.basis.world_revision, ctx.observation.world_revision
+            ),
+        ));
     }
     if !d.is_empty() {
         return Err(d);
@@ -360,19 +562,49 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
     for perm in &h.requested_permissions {
         let ver = h.capabilities.get(perm).map(String::as_str).unwrap_or("1");
         if let Err(den) = ctx.policy.check_capability(perm, ver) {
-            d.push(diag(DiagCategory::Authorization, None, "$.requested_permissions", den.to_string()));
+            d.push(diag(
+                DiagCategory::Authorization,
+                None,
+                "$.requested_permissions",
+                den.to_string(),
+            ));
         }
     }
     for (i, s) in p.steps.iter().enumerate() {
         if !requested.contains(s.capability.as_str()) {
-            d.push(diag(DiagCategory::Authorization, Some(&s.step_id), format!("$.steps[{i}].capability"), format!("step uses `{}` but the plan does not request that permission", s.capability)));
+            d.push(diag(
+                DiagCategory::Authorization,
+                Some(&s.step_id),
+                format!("$.steps[{i}].capability"),
+                format!(
+                    "step uses `{}` but the plan does not request that permission",
+                    s.capability
+                ),
+            ));
         }
-        if let Err(den) = ctx.policy.check_capability(&s.capability, &s.capability_version) {
-            d.push(diag(DiagCategory::Authorization, Some(&s.step_id), format!("$.steps[{i}].capability"), den.to_string()));
+        if let Err(den) = ctx
+            .policy
+            .check_capability(&s.capability, &s.capability_version)
+        {
+            d.push(diag(
+                DiagCategory::Authorization,
+                Some(&s.step_id),
+                format!("$.steps[{i}].capability"),
+                den.to_string(),
+            ));
         }
-        let m: serde_json::Map<String, Value> = s.arguments.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let m: serde_json::Map<String, Value> = s
+            .arguments
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         if let Err(den) = ctx.policy.check_arguments(&s.capability, &m) {
-            d.push(diag(DiagCategory::Authorization, Some(&s.step_id), format!("$.steps[{i}].arguments"), den.to_string()));
+            d.push(diag(
+                DiagCategory::Authorization,
+                Some(&s.step_id),
+                format!("$.steps[{i}].arguments"),
+                den.to_string(),
+            ));
         }
     }
     if !d.is_empty() {
@@ -384,8 +616,16 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
     if n as u32 > max_actions {
         d.push(diag(DiagCategory::Budget, None, "$.steps", format!("{n} steps exceed the action budget {max_actions} (plan requested {}, runtime limit {})", h.budgets.max_actions, ctx.limits.max_actions)));
     }
-    if h.budgets.max_actions == 0 || h.budgets.max_elapsed_ms == 0 || h.budgets.max_planner_rounds == 0 {
-        d.push(diag(DiagCategory::Budget, None, "$.budgets", "budgets must be positive"));
+    if h.budgets.max_actions == 0
+        || h.budgets.max_elapsed_ms == 0
+        || h.budgets.max_planner_rounds == 0
+    {
+        d.push(diag(
+            DiagCategory::Budget,
+            None,
+            "$.budgets",
+            "budgets must be positive",
+        ));
     }
     if !d.is_empty() {
         return Err(d);
@@ -399,17 +639,38 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
         let path = format!("$.steps[{i}]");
         for (ci, c) in s.preconditions.iter().enumerate() {
             if let Err(why) = belief.holds(c, ctx.goal_revision) {
-                d.push(diag(DiagCategory::Feasibility, Some(&s.step_id), format!("{path}.preconditions[{ci}]"), format!("{} does not hold at this point in the plan: {why}", c.describe())));
+                d.push(diag(
+                    DiagCategory::Feasibility,
+                    Some(&s.step_id),
+                    format!("{path}.preconditions[{ci}]"),
+                    format!(
+                        "{} does not hold at this point in the plan: {why}",
+                        c.describe()
+                    ),
+                ));
             }
         }
         if let Err(why) = belief.apply(s) {
-            d.push(diag(DiagCategory::Feasibility, Some(&s.step_id), path.clone(), why));
+            d.push(diag(
+                DiagCategory::Feasibility,
+                Some(&s.step_id),
+                path.clone(),
+                why,
+            ));
             // Stop simulating: later steps would produce cascading noise.
             break;
         }
         for (ci, c) in s.postconditions.iter().enumerate() {
             if let Err(why) = belief.holds(c, ctx.goal_revision) {
-                d.push(diag(DiagCategory::Feasibility, Some(&s.step_id), format!("{path}.postconditions[{ci}]"), format!("declared postcondition {} does not follow from the contract: {why}", c.describe())));
+                d.push(diag(
+                    DiagCategory::Feasibility,
+                    Some(&s.step_id),
+                    format!("{path}.postconditions[{ci}]"),
+                    format!(
+                        "declared postcondition {} does not follow from the contract: {why}",
+                        c.describe()
+                    ),
+                ));
             }
         }
     }
@@ -417,11 +678,21 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
         return Err(d);
     }
     if let Some(held) = belief.gripper() {
-        d.push(diag(DiagCategory::Feasibility, None, "$.steps", format!("plan ends with {held} still in the gripper")));
+        d.push(diag(
+            DiagCategory::Feasibility,
+            None,
+            "$.steps",
+            format!("plan ends with {held} still in the gripper"),
+        ));
     }
     for (rid, rem) in &belief.new_reservations {
         if rem.1 {
-            d.push(diag(DiagCategory::Feasibility, Some(&rem.0), "$.steps", format!("reservation opened by `{rid}` is never released")));
+            d.push(diag(
+                DiagCategory::Feasibility,
+                Some(&rem.0),
+                "$.steps",
+                format!("reservation opened by `{rid}` is never released"),
+            ));
         }
     }
     // Kit assignments and claimed outcome.
@@ -429,23 +700,56 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
     for (ki, ka) in h.kit_assignments.iter().enumerate() {
         let path = format!("$.kit_assignments[{ki}]");
         if ka.kit == 0 || ka.kit > ctx.goal.kit_quantity {
-            d.push(diag(DiagCategory::Feasibility, None, path.clone(), format!("kit {} is outside 1..={}", ka.kit, ctx.goal.kit_quantity)));
+            d.push(diag(
+                DiagCategory::Feasibility,
+                None,
+                path.clone(),
+                format!("kit {} is outside 1..={}", ka.kit, ctx.goal.kit_quantity),
+            ));
         }
         if !trays_seen.insert(ka.tray_id.clone()) {
-            d.push(diag(DiagCategory::Feasibility, None, path.clone(), format!("tray {} assigned to more than one kit", ka.tray_id)));
+            d.push(diag(
+                DiagCategory::Feasibility,
+                None,
+                path.clone(),
+                format!("tray {} assigned to more than one kit", ka.tray_id),
+            ));
         }
         if ctx.observation.location(&ka.tray_id).map(|l| l.loc_type) != Some(LocationType::Tray) {
-            d.push(diag(DiagCategory::Feasibility, None, path, format!("{} is not a tray", ka.tray_id)));
+            d.push(diag(
+                DiagCategory::Feasibility,
+                None,
+                path,
+                format!("{} is not a tray", ka.tray_id),
+            ));
         }
     }
-    let assigned: BTreeSet<String> = h.kit_assignments.iter().map(|k| k.tray_id.clone()).collect();
-    let predicted: BTreeSet<String> = assigned.iter().filter(|t| belief.tray_complete(t, ctx.goal)).cloned().collect();
+    let assigned: BTreeSet<String> = h
+        .kit_assignments
+        .iter()
+        .map(|k| k.tray_id.clone())
+        .collect();
+    let predicted: BTreeSet<String> = assigned
+        .iter()
+        .filter(|t| belief.tray_complete(t, ctx.goal))
+        .cloned()
+        .collect();
     let claimed: BTreeSet<String> = h.expected_outcome.kits_complete.iter().cloned().collect();
     for t in claimed.difference(&predicted) {
-        d.push(diag(DiagCategory::Feasibility, None, "$.expected_outcome.kits_complete", format!("claims {t} will be a complete kit, but the plan does not complete it")));
+        d.push(diag(
+            DiagCategory::Feasibility,
+            None,
+            "$.expected_outcome.kits_complete",
+            format!("claims {t} will be a complete kit, but the plan does not complete it"),
+        ));
     }
     for t in predicted.difference(&claimed) {
-        d.push(diag(DiagCategory::Feasibility, None, "$.expected_outcome.kits_complete", format!("plan completes {t} but does not claim it")));
+        d.push(diag(
+            DiagCategory::Feasibility,
+            None,
+            "$.expected_outcome.kits_complete",
+            format!("plan completes {t} but does not claim it"),
+        ));
     }
     if !d.is_empty() {
         return Err(d);
@@ -480,13 +784,34 @@ impl<'a> Belief<'a> {
     fn from(ctx: &'a CompileContext<'a>) -> Belief<'a> {
         let obs = ctx.observation;
         Belief {
-            loc: obs.objects.iter().map(|o| (o.object_id.clone(), o.location_id.clone())).collect(),
-            kind: obs.objects.iter().map(|o| (o.object_id.clone(), effective_kind(o, ctx.classifications))).collect(),
-            visible_locs: obs.locations.iter().map(|l| (l.location_id.clone(), (l.loc_type, l.accepts_kind.clone(), l.available))).collect(),
+            loc: obs
+                .objects
+                .iter()
+                .map(|o| (o.object_id.clone(), o.location_id.clone()))
+                .collect(),
+            kind: obs
+                .objects
+                .iter()
+                .map(|o| (o.object_id.clone(), effective_kind(o, ctx.classifications)))
+                .collect(),
+            visible_locs: obs
+                .locations
+                .iter()
+                .map(|l| {
+                    (
+                        l.location_id.clone(),
+                        (l.loc_type, l.accepts_kind.clone(), l.available),
+                    )
+                })
+                .collect(),
             withheld: obs.withheld.clone(),
             on_hand: ctx.inventory.on_hand.clone(),
             reserved: ctx.inventory.reserved.clone(),
-            reservations: ctx.inventory.open_reservations().map(|r| (r.reservation_id.clone(), r.remaining.clone())).collect(),
+            reservations: ctx
+                .inventory
+                .open_reservations()
+                .map(|r| (r.reservation_id.clone(), r.remaining.clone()))
+                .collect(),
             new_reservations: BTreeMap::new(),
             consumed: ctx.consumed_evidence.iter().cloned().collect(),
             outputs: BTreeMap::new(),
@@ -495,7 +820,10 @@ impl<'a> Belief<'a> {
     }
 
     fn gripper(&self) -> Option<String> {
-        self.loc.iter().find(|(_, l)| *l == GRIPPER).map(|(o, _)| o.clone())
+        self.loc
+            .iter()
+            .find(|(_, l)| *l == GRIPPER)
+            .map(|(o, _)| o.clone())
     }
 
     fn tray_complete(&self, tray: &str, goal: &GoalSpec) -> bool {
@@ -517,7 +845,10 @@ impl<'a> Belief<'a> {
             }
         };
         match c {
-            Condition::ObjectAt { object_id, location_id } => {
+            Condition::ObjectAt {
+                object_id,
+                location_id,
+            } => {
                 seen(location_id)?;
                 match self.loc.get(object_id) {
                     Some(l) if l == location_id => Ok(()),
@@ -540,18 +871,36 @@ impl<'a> Belief<'a> {
                     None => Err("gripper would be empty".into()),
                 }
             }
-            Condition::LocationAvailable { location_id } => match self.visible_locs.get(location_id) {
-                Some((_, _, true)) => Ok(()),
-                Some((_, _, false)) => Err(format!("{location_id} is observed unavailable")),
-                None => Err(format!("{location_id} is not a known location")),
-            },
-            Condition::QuantityAtLeast { location_id, part_kind, quantity } => {
+            Condition::LocationAvailable { location_id } => {
+                match self.visible_locs.get(location_id) {
+                    Some((_, _, true)) => Ok(()),
+                    Some((_, _, false)) => Err(format!("{location_id} is observed unavailable")),
+                    None => Err(format!("{location_id} is not a known location")),
+                }
+            }
+            Condition::QuantityAtLeast {
+                location_id,
+                part_kind,
+                quantity,
+            } => {
                 seen(location_id)?;
-                let n = self.loc.iter().filter(|(o, l)| *l == location_id && self.kind.get(*o) == Some(part_kind)).count() as u32;
-                if n >= *quantity { Ok(()) } else { Err(format!("{location_id} would have {n} {part_kind}")) }
+                let n = self
+                    .loc
+                    .iter()
+                    .filter(|(o, l)| *l == location_id && self.kind.get(*o) == Some(part_kind))
+                    .count() as u32;
+                if n >= *quantity {
+                    Ok(())
+                } else {
+                    Err(format!("{location_id} would have {n} {part_kind}"))
+                }
             }
             Condition::GoalRevisionEquals { revision } => {
-                if *revision == goal_rev { Ok(()) } else { Err(format!("current goal revision is {goal_rev}")) }
+                if *revision == goal_rev {
+                    Ok(())
+                } else {
+                    Err(format!("current goal revision is {goal_rev}"))
+                }
             }
         }
     }
@@ -570,46 +919,95 @@ impl<'a> Belief<'a> {
             .arguments
             .iter()
             .map(|(k, v)| match ArgValue::parse(v) {
-                Ok(ArgValue::Ref { step_id, output }) => {
-                    (k.clone(), self.outputs.get(&format!("{step_id}.{output}")).cloned().unwrap_or_else(|| v.clone()))
-                }
+                Ok(ArgValue::Ref { step_id, output }) => (
+                    k.clone(),
+                    self.outputs
+                        .get(&format!("{step_id}.{output}"))
+                        .cloned()
+                        .unwrap_or_else(|| v.clone()),
+                ),
                 _ => (k.clone(), v.clone()),
             })
             .collect();
         let a = &a;
-        let lit = |k: &str| a.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+        let lit = |k: &str| {
+            a.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
         let num = |k: &str| a.get(k).and_then(Value::as_u64).unwrap_or(0) as u32;
         match s.capability.as_str() {
             "workspace.pick" => {
                 let (o, src) = (lit("object_id"), lit("source_id"));
-                self.holds(&Condition::GripperEmpty, 0).map_err(|e| format!("pick {o}: {e}"))?;
-                self.holds(&Condition::ObjectAt { object_id: o.clone(), location_id: src.clone() }, 0).map_err(|e| format!("pick {o}: {e}"))?;
-                self.holds(&Condition::LocationAvailable { location_id: src.clone() }, 0).map_err(|e| format!("pick {o}: {e}"))?;
-                self.outputs.insert(format!("{}.object_id", s.step_id), Value::String(o.clone()));
+                self.holds(&Condition::GripperEmpty, 0)
+                    .map_err(|e| format!("pick {o}: {e}"))?;
+                self.holds(
+                    &Condition::ObjectAt {
+                        object_id: o.clone(),
+                        location_id: src.clone(),
+                    },
+                    0,
+                )
+                .map_err(|e| format!("pick {o}: {e}"))?;
+                self.holds(
+                    &Condition::LocationAvailable {
+                        location_id: src.clone(),
+                    },
+                    0,
+                )
+                .map_err(|e| format!("pick {o}: {e}"))?;
+                self.outputs
+                    .insert(format!("{}.object_id", s.step_id), Value::String(o.clone()));
                 self.loc.insert(o, GRIPPER.into());
             }
             "workspace.place" => {
                 let (o, dst) = (lit("object_id"), lit("destination_id"));
-                self.holds(&Condition::GripperHolds { object_id: o.clone() }, 0).map_err(|e| format!("place {o}: {e}"))?;
-                self.holds(&Condition::LocationAvailable { location_id: dst.clone() }, 0).map_err(|e| format!("place {o}: {e}"))?;
+                self.holds(
+                    &Condition::GripperHolds {
+                        object_id: o.clone(),
+                    },
+                    0,
+                )
+                .map_err(|e| format!("place {o}: {e}"))?;
+                self.holds(
+                    &Condition::LocationAvailable {
+                        location_id: dst.clone(),
+                    },
+                    0,
+                )
+                .map_err(|e| format!("place {o}: {e}"))?;
                 if let Some((LocationType::Bin, Some(acc), _)) = self.visible_locs.get(&dst) {
                     let k = self.kind.get(&o).cloned().unwrap_or_default();
                     if *acc != k {
-                        return Err(format!("place {o}: bin {dst} accepts only {acc}, and {o} is {k}"));
+                        return Err(format!(
+                            "place {o}: bin {dst} accepts only {acc}, and {o} is {k}"
+                        ));
                     }
                 }
-                if !matches!(self.visible_locs.get(&dst), Some((LocationType::Bin | LocationType::Tray, _, _))) {
+                if !matches!(
+                    self.visible_locs.get(&dst),
+                    Some((LocationType::Bin | LocationType::Tray, _, _))
+                ) {
                     return Err(format!("place {o}: {dst} is not a bin or tray"));
                 }
-                self.outputs.insert(format!("{}.object_id", s.step_id), Value::String(o.clone()));
+                self.outputs
+                    .insert(format!("{}.object_id", s.step_id), Value::String(o.clone()));
                 self.loc.insert(o, dst);
             }
             "inventory.reserve" => {
                 let counts = counts_from_value(&a["counts"]);
                 for (k, n) in &counts {
-                    let free = self.on_hand.get(k).copied().unwrap_or(0).saturating_sub(self.reserved.get(k).copied().unwrap_or(0));
+                    let free = self
+                        .on_hand
+                        .get(k)
+                        .copied()
+                        .unwrap_or(0)
+                        .saturating_sub(self.reserved.get(k).copied().unwrap_or(0));
                     if *n > free {
-                        return Err(format!("reserve: {n} {k} requested but only {free} reservable in the inventory record"));
+                        return Err(format!(
+                            "reserve: {n} {k} requested but only {free} reservable in the inventory record"
+                        ));
                     }
                     *self.reserved.entry(k.clone()).or_default() += n;
                 }
@@ -620,25 +1018,43 @@ impl<'a> Belief<'a> {
             "inventory.consume" => {
                 let rid = Self::reservation_key(&a["reservation_id"]);
                 let (k, q, ev) = (lit("part_kind"), num("quantity"), lit("evidence_object_id"));
-                let rem = self.reservations.get_mut(&rid).ok_or_else(|| format!("consume: reservation `{rid}` is not open"))?;
+                let rem = self
+                    .reservations
+                    .get_mut(&rid)
+                    .ok_or_else(|| format!("consume: reservation `{rid}` is not open"))?;
                 let have = rem.get(&k).copied().unwrap_or(0);
                 if have < q {
-                    return Err(format!("consume: reservation `{rid}` has {have} {k} remaining, {q} needed"));
+                    return Err(format!(
+                        "consume: reservation `{rid}` has {have} {k} remaining, {q} needed"
+                    ));
                 }
                 rem.insert(k.clone(), have - q);
                 match (self.loc.get(&ev), self.kind.get(&ev)) {
-                    (Some(l), Some(kk)) if kk == &k && matches!(self.visible_locs.get(l), Some((LocationType::Tray, _, _))) => {}
-                    _ => return Err(format!("consume: evidence {ev} would not be a {k} in a tray at this point")),
+                    (Some(l), Some(kk))
+                        if kk == &k
+                            && matches!(
+                                self.visible_locs.get(l),
+                                Some((LocationType::Tray, _, _))
+                            ) => {}
+                    _ => {
+                        return Err(format!(
+                            "consume: evidence {ev} would not be a {k} in a tray at this point"
+                        ));
+                    }
                 }
                 if !self.consumed.insert(ev.clone()) {
                     return Err(format!("consume: {ev} is already recorded as consumed"));
                 }
-                *self.on_hand.entry(k.clone()).or_default() -= q.min(self.on_hand.get(&k).copied().unwrap_or(0));
+                *self.on_hand.entry(k.clone()).or_default() -=
+                    q.min(self.on_hand.get(&k).copied().unwrap_or(0));
                 *self.reserved.entry(k).or_default() -= q;
             }
             "inventory.release" => {
                 let rid = Self::reservation_key(&a["reservation_id"]);
-                let rem = self.reservations.remove(&rid).ok_or_else(|| format!("release: reservation `{rid}` is not open"))?;
+                let rem = self
+                    .reservations
+                    .remove(&rid)
+                    .ok_or_else(|| format!("release: reservation `{rid}` is not open"))?;
                 for (k, n) in rem {
                     *self.reserved.entry(k).or_default() -= n;
                 }
@@ -649,7 +1065,10 @@ impl<'a> Belief<'a> {
             "inventory.return" => {
                 let (k, q, ev) = (lit("part_kind"), num("quantity"), lit("evidence_object_id"));
                 if self.loc.get(&ev) != Some(&bin_for_kind(&k)) {
-                    return Err(format!("return: {ev} would not be in {} at this point", bin_for_kind(&k)));
+                    return Err(format!(
+                        "return: {ev} would not be in {} at this point",
+                        bin_for_kind(&k)
+                    ));
                 }
                 if !self.consumed.remove(&ev) {
                     return Err(format!("return: {ev} was not recorded as consumed"));

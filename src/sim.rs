@@ -10,12 +10,14 @@
 //! Observations are synthesised from simulator state. They are not perception.
 
 use crate::bail;
-use crate::model::{bin_for_kind, LocationType, LocationView, ObjectView, Observation, GRIPPER, KNOWN_KINDS};
+use crate::model::{
+    GRIPPER, KNOWN_KINDS, LocationType, LocationView, ObjectView, Observation, bin_for_kind,
+};
 use crate::scenario::{FaultSpec, HumanAction, Scenario, Trigger};
-use crate::util::{fingerprint, now_ms, Result, SIMULATED_CRASH_EXIT_CODE};
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use crate::util::{Result, SIMULATED_CRASH_EXIT_CODE, fingerprint, now_ms};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use std::time::Duration;
 
@@ -189,12 +191,16 @@ impl SimWorld {
     /// Create a fresh world from a scenario. Refuses to overwrite an existing store.
     pub fn create(path: &Path, sc: &Scenario) -> Result<SimWorld> {
         if path.exists() {
-            bail!("world store {} already exists; refusing to overwrite", path.display());
+            bail!(
+                "world store {} already exists; refusing to overwrite",
+                path.display()
+            );
         }
         let mut conn = Self::open_conn(path)?;
         conn.execute_batch(SCHEMA)?;
         let tx = conn.transaction()?;
-        let mut locs: Vec<(String, LocationType, Option<String>)> = vec![(GRIPPER.into(), LocationType::Gripper, None)];
+        let mut locs: Vec<(String, LocationType, Option<String>)> =
+            vec![(GRIPPER.into(), LocationType::Gripper, None)];
         for k in KNOWN_KINDS {
             locs.push((bin_for_kind(k), LocationType::Bin, Some(k.to_string())));
         }
@@ -245,7 +251,10 @@ impl SimWorld {
             )?;
         }
         for c in ["workspace.pick", "workspace.place"] {
-            tx.execute("INSERT INTO effect_counters(capability, applied) VALUES (?1, 0)", params![c])?;
+            tx.execute(
+                "INSERT INTO effect_counters(capability, applied) VALUES (?1, 0)",
+                params![c],
+            )?;
         }
         tx.commit()?;
         Ok(SimWorld { conn })
@@ -255,21 +264,33 @@ impl SimWorld {
         if !path.exists() {
             bail!("world store {} does not exist", path.display());
         }
-        Ok(SimWorld { conn: Self::open_conn(path)? })
+        Ok(SimWorld {
+            conn: Self::open_conn(path)?,
+        })
     }
 
     fn revision(tx: &Transaction) -> Result<i64> {
-        Ok(tx.query_row("SELECT revision FROM world_meta WHERE id = 1", [], |r| r.get(0))?)
+        Ok(
+            tx.query_row("SELECT revision FROM world_meta WHERE id = 1", [], |r| {
+                r.get(0)
+            })?,
+        )
     }
 
     fn bump_revision(tx: &Transaction) -> Result<i64> {
-        tx.execute("UPDATE world_meta SET revision = revision + 1 WHERE id = 1", [])?;
+        tx.execute(
+            "UPDATE world_meta SET revision = revision + 1 WHERE id = 1",
+            [],
+        )?;
         Self::revision(tx)
     }
 
     fn blackout(conn: &Connection) -> Result<(bool, Vec<String>)> {
-        let (b, w): (i64, String) =
-            conn.query_row("SELECT blackout, blackout_withhold FROM world_meta WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let (b, w): (i64, String) = conn.query_row(
+            "SELECT blackout, blackout_withhold FROM world_meta WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
         Ok((b != 0, serde_json::from_str(&w).unwrap_or_default()))
     }
 
@@ -289,7 +310,11 @@ impl SimWorld {
 
     fn observe_inner(&mut self) -> Result<Observation> {
         let (blackout, withhold) = Self::blackout(&self.conn)?;
-        let rev: i64 = self.conn.query_row("SELECT revision FROM world_meta WHERE id = 1", [], |r| r.get(0))?;
+        let rev: i64 =
+            self.conn
+                .query_row("SELECT revision FROM world_meta WHERE id = 1", [], |r| {
+                    r.get(0)
+                })?;
         let mut stmt = self
             .conn
             .prepare("SELECT location_id, loc_type, accepts_kind, available FROM locations WHERE loc_type != 'outside' ORDER BY location_id")?;
@@ -308,7 +333,13 @@ impl SimWorld {
             "SELECT object_id, observed_kind, location_id FROM objects WHERE location_id != 'outside' ORDER BY object_id",
         )?;
         let objects: Vec<ObjectView> = stmt
-            .query_map([], |r| Ok(ObjectView { object_id: r.get(0)?, observed_kind: r.get(1)?, location_id: r.get(2)? }))?
+            .query_map([], |r| {
+                Ok(ObjectView {
+                    object_id: r.get(0)?,
+                    observed_kind: r.get(1)?,
+                    location_id: r.get(2)?,
+                })
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|o| !withheld.contains(&o.location_id))
@@ -335,65 +366,111 @@ impl SimWorld {
     fn status_inner(&mut self, op_key: &str) -> Result<StatusResult> {
         let (blackout, _) = Self::blackout(&self.conn)?;
         if blackout {
-            return Ok(StatusResult::Unavailable { message: "operation status service not responding".into() });
+            return Ok(StatusResult::Unavailable {
+                message: "operation status service not responding".into(),
+            });
         }
         let row: Option<(String, Option<String>, String)> = self
             .conn
-            .query_row("SELECT outcome, category, detail FROM receipts WHERE op_key = ?1", params![op_key], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
+            .query_row(
+                "SELECT outcome, category, detail FROM receipts WHERE op_key = ?1",
+                params![op_key],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .optional()?;
         Ok(match row {
             None => StatusResult::NotFound,
-            Some((o, _, d)) if o == "applied" => StatusResult::Applied { receipt: serde_json::from_str(&d)? },
+            Some((o, _, d)) if o == "applied" => StatusResult::Applied {
+                receipt: serde_json::from_str(&d)?,
+            },
             Some((_, c, d)) => StatusResult::Rejected {
                 category: c.unwrap_or_default(),
-                message: serde_json::from_str::<Value>(&d)?.get("message").and_then(Value::as_str).unwrap_or("").to_string(),
+                message: serde_json::from_str::<Value>(&d)?
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
             },
         })
     }
 
     // ---------------------------------------------------------------- effects
 
-    pub fn pick(&mut self, op_key: &str, object_id: &str, source_id: &str) -> (AdapterOutcome, Vec<FiredHumanAction>) {
+    pub fn pick(
+        &mut self,
+        op_key: &str,
+        object_id: &str,
+        source_id: &str,
+    ) -> (AdapterOutcome, Vec<FiredHumanAction>) {
         let args = json!({"object_id": object_id, "source_id": source_id});
         self.effect(op_key, "workspace.pick", &args)
     }
 
-    pub fn place(&mut self, op_key: &str, object_id: &str, destination_id: &str) -> (AdapterOutcome, Vec<FiredHumanAction>) {
+    pub fn place(
+        &mut self,
+        op_key: &str,
+        object_id: &str,
+        destination_id: &str,
+    ) -> (AdapterOutcome, Vec<FiredHumanAction>) {
         let args = json!({"object_id": object_id, "destination_id": destination_id});
         self.effect(op_key, "workspace.place", &args)
     }
 
-    fn effect(&mut self, op_key: &str, capability: &str, args: &Value) -> (AdapterOutcome, Vec<FiredHumanAction>) {
+    fn effect(
+        &mut self,
+        op_key: &str,
+        capability: &str,
+        args: &Value,
+    ) -> (AdapterOutcome, Vec<FiredHumanAction>) {
         match self.effect_inner(op_key, capability, args) {
             Ok(r) => r,
             // A local storage error is treated as "not accepted": the transaction rolled back.
-            Err(e) => (AdapterOutcome::Unavailable { message: format!("adapter store error: {}", e.msg) }, vec![]),
+            Err(e) => (
+                AdapterOutcome::Unavailable {
+                    message: format!("adapter store error: {}", e.msg),
+                },
+                vec![],
+            ),
         }
     }
 
-    fn effect_inner(&mut self, op_key: &str, capability: &str, args: &Value) -> Result<(AdapterOutcome, Vec<FiredHumanAction>)> {
+    fn effect_inner(
+        &mut self,
+        op_key: &str,
+        capability: &str,
+        args: &Value,
+    ) -> Result<(AdapterOutcome, Vec<FiredHumanAction>)> {
         let fp = fingerprint(&json!({"capability": capability, "args": args}));
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         let (blackout, _) = Self::blackout(&tx)?;
         if blackout {
-            return Ok((AdapterOutcome::Unavailable { message: "workspace controller not accepting commands".into() }, vec![]));
+            return Ok((
+                AdapterOutcome::Unavailable {
+                    message: "workspace controller not accepting commands".into(),
+                },
+                vec![],
+            ));
         }
 
         // Idempotency: an existing receipt under this key is returned, never re-applied.
         let existing: Option<(String, String, Option<String>, String)> = tx
-            .query_row("SELECT fingerprint, outcome, category, detail FROM receipts WHERE op_key = ?1", params![op_key], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })
+            .query_row(
+                "SELECT fingerprint, outcome, category, detail FROM receipts WHERE op_key = ?1",
+                params![op_key],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
             .optional()?;
         if let Some((efp, outcome, cat, detail)) = existing {
             if efp != fp {
                 return Ok((
                     AdapterOutcome::Rejected {
                         category: "key_conflict".into(),
-                        message: format!("operation key {op_key} was already used with different arguments; no effect"),
+                        message: format!(
+                            "operation key {op_key} was already used with different arguments; no effect"
+                        ),
                     },
                     vec![],
                 ));
@@ -401,39 +478,63 @@ impl SimWorld {
             let detail: Value = serde_json::from_str(&detail)?;
             return Ok((
                 if outcome == "applied" {
-                    AdapterOutcome::Applied { receipt: detail, replayed: true }
+                    AdapterOutcome::Applied {
+                        receipt: detail,
+                        replayed: true,
+                    }
                 } else {
                     AdapterOutcome::Rejected {
                         category: cat.unwrap_or_default(),
-                        message: detail.get("message").and_then(Value::as_str).unwrap_or("").to_string(),
+                        message: detail
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
                     }
                 },
                 vec![],
             ));
         }
 
-        let applied_so_far: i64 =
-            tx.query_row("SELECT applied FROM effect_counters WHERE capability = ?1", params![capability], |r| r.get(0))?;
+        let applied_so_far: i64 = tx.query_row(
+            "SELECT applied FROM effect_counters WHERE capability = ?1",
+            params![capability],
+            |r| r.get(0),
+        )?;
         let nth_next = (applied_so_far + 1) as u32;
 
         // Faults that fire *before* the effect.
         let armed = Self::armed(&tx)?;
         for (fid, spec) in &armed {
-            let Some(FaultOrHuman::Fault(f)) = spec else { continue };
+            let Some(FaultOrHuman::Fault(f)) = spec else {
+                continue;
+            };
             match f {
                 FaultSpec::CrashBeforeEffect { on } if Self::matches(on, capability, nth_next) => {
                     Self::fire(&tx, *fid, op_key)?;
-                    Self::log(&tx, "fault_fired", &json!({"fault_id": fid, "kind": "crash_before_effect", "op_key": op_key}))?;
+                    Self::log(
+                        &tx,
+                        "fault_fired",
+                        &json!({"fault_id": fid, "kind": "crash_before_effect", "op_key": op_key}),
+                    )?;
                     tx.commit()?;
-                    eprintln!("[sim] injected crash before effect of {op_key} ({capability} #{nth_next}); exiting");
+                    eprintln!(
+                        "[sim] injected crash before effect of {op_key} ({capability} #{nth_next}); exiting"
+                    );
                     std::process::exit(SIMULATED_CRASH_EXIT_CODE);
                 }
-                FaultSpec::TimeoutBeforeEffect { on, blackout } if Self::matches(on, capability, nth_next) => {
+                FaultSpec::TimeoutBeforeEffect { on, blackout }
+                    if Self::matches(on, capability, nth_next) =>
+                {
                     Self::fire(&tx, *fid, op_key)?;
                     if *blackout {
                         Self::set_blackout_tx(&tx, true, &Self::default_withhold(&tx, args)?)?;
                     }
-                    Self::log(&tx, "fault_fired", &json!({"fault_id": fid, "kind": "timeout_before_effect", "op_key": op_key}))?;
+                    Self::log(
+                        &tx,
+                        "fault_fired",
+                        &json!({"fault_id": fid, "kind": "timeout_before_effect", "op_key": op_key}),
+                    )?;
                     tx.commit()?;
                     return Ok((AdapterOutcome::Timeout, vec![]));
                 }
@@ -450,18 +551,39 @@ impl SimWorld {
                 params![op_key, capability, fp, cat, json!({"message": msg, "args": args}).to_string(), rev, now_ms()],
             )?;
             tx.commit()?;
-            return Ok((AdapterOutcome::Rejected { category: cat, message: msg }, vec![]));
+            return Ok((
+                AdapterOutcome::Rejected {
+                    category: cat,
+                    message: msg,
+                },
+                vec![],
+            ));
         }
 
         // Apply the effect.
         let object_id = args["object_id"].as_str().unwrap_or_default();
         let (from, to) = match capability {
-            "workspace.pick" => (args["source_id"].as_str().unwrap_or_default().to_string(), GRIPPER.to_string()),
-            _ => (GRIPPER.to_string(), args["destination_id"].as_str().unwrap_or_default().to_string()),
+            "workspace.pick" => (
+                args["source_id"].as_str().unwrap_or_default().to_string(),
+                GRIPPER.to_string(),
+            ),
+            _ => (
+                GRIPPER.to_string(),
+                args["destination_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
         };
-        tx.execute("UPDATE objects SET location_id = ?1 WHERE object_id = ?2", params![to, object_id])?;
+        tx.execute(
+            "UPDATE objects SET location_id = ?1 WHERE object_id = ?2",
+            params![to, object_id],
+        )?;
         let rev = Self::bump_revision(&tx)?;
-        tx.execute("UPDATE effect_counters SET applied = applied + 1 WHERE capability = ?1", params![capability])?;
+        tx.execute(
+            "UPDATE effect_counters SET applied = applied + 1 WHERE capability = ?1",
+            params![capability],
+        )?;
         let receipt = json!({
             "op_key": op_key, "capability": capability, "object_id": object_id,
             "from": from, "to": to, "world_revision": rev
@@ -488,11 +610,18 @@ impl SimWorld {
                         FaultSpec::TimeoutAfterEffect { blackout, .. } => {
                             timeout = true;
                             if *blackout {
-                                Self::set_blackout_tx(&tx, true, &Self::default_withhold(&tx, args)?)?;
+                                Self::set_blackout_tx(
+                                    &tx,
+                                    true,
+                                    &Self::default_withhold(&tx, args)?,
+                                )?;
                             }
                         }
                         FaultSpec::DestinationUnavailable { location_id, .. } => {
-                            tx.execute("UPDATE locations SET available = 0 WHERE location_id = ?1", params![location_id])?;
+                            tx.execute(
+                                "UPDATE locations SET available = 0 WHERE location_id = ?1",
+                                params![location_id],
+                            )?;
                             Self::bump_revision(&tx)?;
                         }
                         FaultSpec::RemoveObject { object_id, .. } => {
@@ -503,7 +632,10 @@ impl SimWorld {
                             Self::bump_revision(&tx)?;
                         }
                         FaultSpec::PlannerUnavailable { .. } => {
-                            tx.execute("UPDATE world_meta SET planner_offline = 1 WHERE id = 1", [])?;
+                            tx.execute(
+                                "UPDATE world_meta SET planner_offline = 1 WHERE id = 1",
+                                [],
+                            )?;
                         }
                         FaultSpec::InjectUnauthorizedAction { .. } => {
                             // Becomes due for the planner wrapper; consumed there.
@@ -513,13 +645,24 @@ impl SimWorld {
                         _ => continue,
                     }
                     Self::fire(&tx, *fid, op_key)?;
-                    Self::log(&tx, "fault_fired", &json!({"fault_id": fid, "fault": f, "op_key": op_key}))?;
+                    Self::log(
+                        &tx,
+                        "fault_fired",
+                        &json!({"fault_id": fid, "fault": f, "op_key": op_key}),
+                    )?;
                 }
                 Some(FaultOrHuman::Human(a)) => {
                     if Self::matches(a.trigger(), capability, nth_next) {
                         Self::fire(&tx, *fid, op_key)?;
-                        Self::log(&tx, "human_action_due", &json!({"fault_id": fid, "action": a, "op_key": op_key}))?;
-                        human.push(FiredHumanAction { fault_id: *fid, action: a.clone() });
+                        Self::log(
+                            &tx,
+                            "human_action_due",
+                            &json!({"fault_id": fid, "action": a, "op_key": op_key}),
+                        )?;
+                        human.push(FiredHumanAction {
+                            fault_id: *fid,
+                            action: a.clone(),
+                        });
                     }
                 }
                 None => {}
@@ -527,13 +670,21 @@ impl SimWorld {
         }
         tx.commit()?;
         if crash {
-            eprintln!("[sim] injected crash after effect of {op_key} ({capability} #{nth_next}) committed; exiting before the executor records it");
+            eprintln!(
+                "[sim] injected crash after effect of {op_key} ({capability} #{nth_next}) committed; exiting before the executor records it"
+            );
             std::process::exit(SIMULATED_CRASH_EXIT_CODE);
         }
         if timeout {
             return Ok((AdapterOutcome::Timeout, human));
         }
-        Ok((AdapterOutcome::Applied { receipt, replayed: false }, human))
+        Ok((
+            AdapterOutcome::Applied {
+                receipt,
+                replayed: false,
+            },
+            human,
+        ))
     }
 
     fn matches(on: &Trigger, capability: &str, nth: u32) -> bool {
@@ -541,9 +692,15 @@ impl SimWorld {
     }
 
     fn armed(tx: &Transaction) -> Result<Vec<(i64, Option<FaultOrHuman>)>> {
-        let mut stmt = tx.prepare("SELECT fault_id, spec FROM faults WHERE state = 'armed' ORDER BY fault_id")?;
-        let rows: Vec<(i64, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
-        Ok(rows.into_iter().map(|(id, s)| (id, FaultOrHuman::parse(&s))).collect())
+        let mut stmt = tx
+            .prepare("SELECT fault_id, spec FROM faults WHERE state = 'armed' ORDER BY fault_id")?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, s)| (id, FaultOrHuman::parse(&s)))
+            .collect())
     }
 
     fn fire(tx: &Transaction, fid: i64, op_key: &str) -> Result<()> {
@@ -562,15 +719,17 @@ impl SimWorld {
             }
         }
         // Also withhold wherever the object currently is, so observation cannot settle it.
-        if let Some(obj) = args.get("object_id").and_then(Value::as_str) {
-            if let Some(loc) = tx
-                .query_row("SELECT location_id FROM objects WHERE object_id = ?1", params![obj], |r| r.get::<_, String>(0))
+        if let Some(obj) = args.get("object_id").and_then(Value::as_str)
+            && let Some(loc) = tx
+                .query_row(
+                    "SELECT location_id FROM objects WHERE object_id = ?1",
+                    params![obj],
+                    |r| r.get::<_, String>(0),
+                )
                 .optional()?
-            {
-                if !w.contains(&loc) {
-                    w.push(loc);
-                }
-            }
+            && !w.contains(&loc)
+        {
+            w.push(loc);
         }
         Ok(w)
     }
@@ -583,13 +742,22 @@ impl SimWorld {
         Ok(())
     }
 
-    fn check_preconditions(tx: &Transaction, capability: &str, args: &Value) -> Result<std::result::Result<(), (String, String)>> {
+    fn check_preconditions(
+        tx: &Transaction,
+        capability: &str,
+        args: &Value,
+    ) -> Result<std::result::Result<(), (String, String)>> {
         let pf = |m: String| Ok(Err(("precondition_failed".to_string(), m)));
-        let object_id = args.get("object_id").and_then(Value::as_str).unwrap_or_default();
+        let object_id = args
+            .get("object_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let obj: Option<(String, String)> = tx
-            .query_row("SELECT location_id, true_kind FROM objects WHERE object_id = ?1", params![object_id], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT location_id, true_kind FROM objects WHERE object_id = ?1",
+                params![object_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .optional()?;
         let Some((obj_loc, true_kind)) = obj else {
             return pf(format!("object {object_id} is not in the workspace"));
@@ -602,14 +770,23 @@ impl SimWorld {
                 .optional()?)
         };
         let held: Option<String> = tx
-            .query_row("SELECT object_id FROM objects WHERE location_id = 'gripper'", [], |r| r.get(0))
+            .query_row(
+                "SELECT object_id FROM objects WHERE location_id = 'gripper'",
+                [],
+                |r| r.get(0),
+            )
             .optional()?;
         match capability {
             "workspace.pick" => {
-                let src = args.get("source_id").and_then(Value::as_str).unwrap_or_default();
+                let src = args
+                    .get("source_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 match loc_info(src)? {
                     None => return pf(format!("unknown location {src}")),
-                    Some((t, _, _)) if t == "outside" || t == "gripper" => return pf(format!("{src} is not a pick source")),
+                    Some((t, _, _)) if t == "outside" || t == "gripper" => {
+                        return pf(format!("{src} is not a pick source"));
+                    }
                     Some((_, _, false)) => return pf(format!("{src} is unavailable")),
                     _ => {}
                 }
@@ -621,13 +798,18 @@ impl SimWorld {
                 }
             }
             "workspace.place" => {
-                let dst = args.get("destination_id").and_then(Value::as_str).unwrap_or_default();
+                let dst = args
+                    .get("destination_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if held.as_deref() != Some(object_id) {
                     return pf(format!("gripper does not hold {object_id}"));
                 }
                 match loc_info(dst)? {
                     None => return pf(format!("unknown location {dst}")),
-                    Some((t, _, _)) if t == "outside" || t == "gripper" => return pf(format!("{dst} is not a destination")),
+                    Some((t, _, _)) if t == "outside" || t == "gripper" => {
+                        return pf(format!("{dst} is not a destination"));
+                    }
                     Some((_, _, false)) => return pf(format!("destination {dst} is unavailable")),
                     Some((t, Some(acc), _)) if t == "bin" && acc != true_kind => {
                         return pf(format!("bin {dst} only accepts {acc}"));
@@ -635,7 +817,12 @@ impl SimWorld {
                     _ => {}
                 }
             }
-            other => return Ok(Err(("malformed".into(), format!("simulator does not implement {other}")))),
+            other => {
+                return Ok(Err((
+                    "malformed".into(),
+                    format!("simulator does not implement {other}"),
+                )));
+            }
         }
         Ok(Ok(()))
     }
@@ -643,46 +830,91 @@ impl SimWorld {
     // ---------------------------------------------------------------- harness / simulation controls
 
     pub fn set_blackout(&mut self, on: bool) -> Result<()> {
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let withhold = if on { vec![GRIPPER.to_string()] } else { vec![] };
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let withhold = if on {
+            vec![GRIPPER.to_string()]
+        } else {
+            vec![]
+        };
         Self::set_blackout_tx(&tx, on, &withhold)?;
-        Self::log(&tx, if on { "blackout_on" } else { "evidence_restored" }, &json!({}))?;
+        Self::log(
+            &tx,
+            if on {
+                "blackout_on"
+            } else {
+                "evidence_restored"
+            },
+            &json!({}),
+        )?;
         tx.commit()?;
         Ok(())
     }
 
     pub fn set_location_available(&mut self, location_id: &str, available: bool) -> Result<()> {
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let n = tx.execute("UPDATE locations SET available = ?1 WHERE location_id = ?2", params![available as i64, location_id])?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let n = tx.execute(
+            "UPDATE locations SET available = ?1 WHERE location_id = ?2",
+            params![available as i64, location_id],
+        )?;
         if n == 0 {
             bail!("unknown location {location_id}");
         }
         Self::bump_revision(&tx)?;
-        Self::log(&tx, "location_availability", &json!({"location_id": location_id, "available": available}))?;
+        Self::log(
+            &tx,
+            "location_availability",
+            &json!({"location_id": location_id, "available": available}),
+        )?;
         tx.commit()?;
         Ok(())
     }
 
     pub fn set_planner_offline(&mut self, offline: bool) -> Result<()> {
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute("UPDATE world_meta SET planner_offline = ?1 WHERE id = 1", params![offline as i64])?;
-        Self::log(&tx, if offline { "planner_offline" } else { "planner_restored" }, &json!({}))?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE world_meta SET planner_offline = ?1 WHERE id = 1",
+            params![offline as i64],
+        )?;
+        Self::log(
+            &tx,
+            if offline {
+                "planner_offline"
+            } else {
+                "planner_restored"
+            },
+            &json!({}),
+        )?;
         tx.commit()?;
         Ok(())
     }
 
     pub fn planner_offline(&self) -> Result<bool> {
-        Ok(self.conn.query_row("SELECT planner_offline FROM world_meta WHERE id = 1", [], |r| r.get::<_, i64>(0))? != 0)
+        Ok(self.conn.query_row(
+            "SELECT planner_offline FROM world_meta WHERE id = 1",
+            [],
+            |r| r.get::<_, i64>(0),
+        )? != 0)
     }
 
     /// Arm an additional fault at runtime (UI simulation controls).
     pub fn arm_fault(&mut self, f: &FaultSpec) -> Result<i64> {
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Start-of-run planner faults with no trigger apply immediately.
         if let FaultSpec::PlannerUnavailable { on: None } = f {
             tx.execute("UPDATE world_meta SET planner_offline = 1 WHERE id = 1", [])?;
         }
-        tx.execute("INSERT INTO faults(spec, state) VALUES (?1, 'armed')", params![json!({"fault": f}).to_string()])?;
+        tx.execute(
+            "INSERT INTO faults(spec, state) VALUES (?1, 'armed')",
+            params![json!({"fault": f}).to_string()],
+        )?;
         let id = tx.last_insert_rowid();
         Self::log(&tx, "fault_armed", &json!({"fault_id": id, "fault": f}))?;
         tx.commit()?;
@@ -691,14 +923,21 @@ impl SimWorld {
 
     /// Apply scenario faults that have no trigger (e.g. planner offline from the start).
     pub fn apply_untriggered(&mut self) -> Result<()> {
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         for (fid, spec) in Self::armed(&tx)? {
             if let Some(FaultOrHuman::Fault(FaultSpec::PlannerUnavailable { on: None })) = spec {
                 tx.execute("UPDATE world_meta SET planner_offline = 1 WHERE id = 1", [])?;
                 Self::fire(&tx, fid, "")?;
             }
-            if let Some(FaultOrHuman::Fault(FaultSpec::InjectUnauthorizedAction { on: None })) = spec {
-                tx.execute("UPDATE faults SET state = 'fired', fired_at_ms = ?1 WHERE fault_id = ?2", params![now_ms(), fid])?;
+            if let Some(FaultOrHuman::Fault(FaultSpec::InjectUnauthorizedAction { on: None })) =
+                spec
+            {
+                tx.execute(
+                    "UPDATE faults SET state = 'fired', fired_at_ms = ?1 WHERE fault_id = ?2",
+                    params![now_ms(), fid],
+                )?;
             }
         }
         tx.commit()?;
@@ -707,21 +946,36 @@ impl SimWorld {
 
     /// One-shot consumption of a due "inject unauthorized action" fault by the planner wrapper.
     pub fn take_due_injection(&mut self) -> Result<bool> {
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut due = None;
         {
-            let mut stmt = tx.prepare("SELECT fault_id, spec FROM faults WHERE state = 'fired' ORDER BY fault_id")?;
-            let rows: Vec<(i64, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
+            let mut stmt = tx.prepare(
+                "SELECT fault_id, spec FROM faults WHERE state = 'fired' ORDER BY fault_id",
+            )?;
+            let rows: Vec<(i64, String)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<std::result::Result<_, _>>()?;
             for (id, s) in rows {
-                if let Some(FaultOrHuman::Fault(FaultSpec::InjectUnauthorizedAction { .. })) = FaultOrHuman::parse(&s) {
+                if let Some(FaultOrHuman::Fault(FaultSpec::InjectUnauthorizedAction { .. })) =
+                    FaultOrHuman::parse(&s)
+                {
                     due = Some(id);
                     break;
                 }
             }
         }
         if let Some(id) = due {
-            tx.execute("UPDATE faults SET state = 'consumed' WHERE fault_id = ?1", params![id])?;
-            Self::log(&tx, "fault_consumed", &json!({"fault_id": id, "kind": "inject_unauthorized_action"}))?;
+            tx.execute(
+                "UPDATE faults SET state = 'consumed' WHERE fault_id = ?1",
+                params![id],
+            )?;
+            Self::log(
+                &tx,
+                "fault_consumed",
+                &json!({"fault_id": id, "kind": "inject_unauthorized_action"}),
+            )?;
         }
         tx.commit()?;
         Ok(due.is_some())
@@ -735,11 +989,22 @@ impl SimWorld {
     }
 
     pub fn harness_log(&self) -> Result<Vec<(i64, String, Value)>> {
-        let mut stmt = self.conn.prepare("SELECT at_ms, kind, detail FROM harness_log ORDER BY id")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT at_ms, kind, detail FROM harness_log ORDER BY id")?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows.into_iter().map(|(t, k, d)| (t, k, serde_json::from_str(&d).unwrap_or(Value::Null))).collect())
+        Ok(rows
+            .into_iter()
+            .map(|(t, k, d)| (t, k, serde_json::from_str(&d).unwrap_or(Value::Null)))
+            .collect())
     }
 
     /// Authoritative truth. For the evaluator and the UI's labelled truth panel only.
@@ -764,7 +1029,12 @@ impl SimWorld {
             self.conn.prepare("SELECT object_id, true_kind, observed_kind, location_id FROM objects ORDER BY object_id")?;
         let objects = stmt
             .query_map([], |r| {
-                Ok(TruthObject { object_id: r.get(0)?, true_kind: r.get(1)?, observed_kind: r.get(2)?, location_id: r.get(3)? })
+                Ok(TruthObject {
+                    object_id: r.get(0)?,
+                    true_kind: r.get(1)?,
+                    observed_kind: r.get(2)?,
+                    location_id: r.get(3)?,
+                })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut stmt = self
@@ -782,7 +1052,9 @@ impl SimWorld {
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let mut stmt = self.conn.prepare("SELECT fault_id, spec, state, fired_at_ms, fired_op_key FROM faults ORDER BY fault_id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT fault_id, spec, state, fired_at_ms, fired_op_key FROM faults ORDER BY fault_id",
+        )?;
         let faults = stmt
             .query_map([], |r| {
                 Ok(FaultRow {
@@ -816,10 +1088,14 @@ impl FaultOrHuman {
     fn parse(s: &str) -> Option<FaultOrHuman> {
         let v: Value = serde_json::from_str(s).ok()?;
         if let Some(f) = v.get("fault") {
-            return serde_json::from_value(f.clone()).ok().map(FaultOrHuman::Fault);
+            return serde_json::from_value(f.clone())
+                .ok()
+                .map(FaultOrHuman::Fault);
         }
         if let Some(h) = v.get("human") {
-            return serde_json::from_value(h.clone()).ok().map(FaultOrHuman::Human);
+            return serde_json::from_value(h.clone())
+                .ok()
+                .map(FaultOrHuman::Human);
         }
         None
     }

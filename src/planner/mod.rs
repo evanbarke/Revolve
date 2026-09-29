@@ -97,7 +97,9 @@ pub enum PlannerResponse {
     /// Raw, untrusted Action IR JSON.
     Plan(Value),
     Clarify(Clarification),
-    Unable { reason: String },
+    Unable {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -115,9 +117,15 @@ impl std::fmt::Display for PlannerError {
         match self {
             PlannerError::Unavailable { message } => write!(f, "planner unavailable: {message}"),
             PlannerError::Timeout => write!(f, "planner timed out"),
-            PlannerError::Malformed { message } => write!(f, "malformed planner response: {message}"),
-            PlannerError::NotConfigured { message } => write!(f, "planner not configured: {message}"),
-            PlannerError::BudgetExhausted { message } => write!(f, "planner budget exhausted: {message}"),
+            PlannerError::Malformed { message } => {
+                write!(f, "malformed planner response: {message}")
+            }
+            PlannerError::NotConfigured { message } => {
+                write!(f, "planner not configured: {message}")
+            }
+            PlannerError::BudgetExhausted { message } => {
+                write!(f, "planner budget exhausted: {message}")
+            }
         }
     }
 }
@@ -169,8 +177,15 @@ pub struct AgentReport {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentDecision {
-    Call { capability: String, version: String, arguments: Value, retry_of: Option<i64> },
-    Status { op_key: String },
+    Call {
+        capability: String,
+        version: String,
+        arguments: Value,
+        retry_of: Option<i64>,
+    },
+    Status {
+        op_key: String,
+    },
     Ask(Clarification),
     Finish(AgentReport),
 }
@@ -182,7 +197,15 @@ pub trait Planner {
         false
     }
     fn plan(&mut self, req: &PlanningRequest) -> (Result<PlannerResponse, PlannerError>, CallInfo);
-    fn next_action(&mut self, _req: &AgentRequest) -> (Result<AgentDecision, PlannerError>, CallInfo) {
-        (Err(PlannerError::NotConfigured { message: format!("{} does not support direct tool calling", self.label()) }), CallInfo::default())
+    fn next_action(
+        &mut self,
+        _req: &AgentRequest,
+    ) -> (Result<AgentDecision, PlannerError>, CallInfo) {
+        (
+            Err(PlannerError::NotConfigured {
+                message: format!("{} does not support direct tool calling", self.label()),
+            }),
+            CallInfo::default(),
+        )
     }
 }

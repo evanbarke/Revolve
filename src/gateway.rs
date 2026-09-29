@@ -5,7 +5,7 @@
 
 use crate::capability::{self, Contract};
 use crate::inventory;
-use crate::model::{bin_for_kind, effective_kind, LocationType, Observation};
+use crate::model::{LocationType, Observation, bin_for_kind, effective_kind};
 use crate::policy::{Denial, Policy};
 use crate::scenario::HumanAction;
 use crate::sim::{AdapterOutcome, FiredHumanAction, SimWorld, StatusResult};
@@ -36,8 +36,15 @@ impl HumanHook for ScriptedHuman {
         for f in fired {
             match &f.action {
                 HumanAction::Correct { goal, on } => {
-                    match store.submit_goal_revision(goal, "scripted-human", &format!("scenario correction at {}", on.describe())) {
-                        Ok(rev) => eprintln!("[scripted human] goal corrected to revision {rev}: {}", goal.summary()),
+                    match store.submit_goal_revision(
+                        goal,
+                        "scripted-human",
+                        &format!("scenario correction at {}", on.describe()),
+                    ) {
+                        Ok(rev) => eprintln!(
+                            "[scripted human] goal corrected to revision {rev}: {}",
+                            goal.summary()
+                        ),
                         Err(e) => eprintln!("[scripted human] correction rejected: {e}"),
                     }
                 }
@@ -59,8 +66,12 @@ pub struct Gateway<'a> {
 pub fn check_arg_types(contract: &Contract, args: &Value) -> Result<(), String> {
     let obj = args.as_object().ok_or("arguments must be an object")?;
     for spec in &contract.args {
-        let v = obj.get(spec.name).ok_or_else(|| format!("missing argument `{}`", spec.name))?;
-        spec.ty.check(v).map_err(|e| format!("argument `{}`: {e}", spec.name))?;
+        let v = obj
+            .get(spec.name)
+            .ok_or_else(|| format!("missing argument `{}`", spec.name))?;
+        spec.ty
+            .check(v)
+            .map_err(|e| format!("argument `{}`: {e}", spec.name))?;
     }
     for k in obj.keys() {
         if contract.arg(k).is_none() {
@@ -86,7 +97,12 @@ impl<'a> Gateway<'a> {
     }
 
     /// Evidence check for inventory records that claim a physical fact.
-    fn check_evidence(&mut self, store: &RunStore, capability: &str, args: &Value) -> Option<AdapterOutcome> {
+    fn check_evidence(
+        &mut self,
+        store: &RunStore,
+        capability: &str,
+        args: &Value,
+    ) -> Option<AdapterOutcome> {
         let (obj, want_tray) = match capability {
             "inventory.consume" => (args.get("evidence_object_id")?.as_str()?, true),
             "inventory.return" => (args.get("evidence_object_id")?.as_str()?, false),
@@ -95,7 +111,11 @@ impl<'a> Gateway<'a> {
         let kind = args.get("part_kind")?.as_str()?;
         let obs = match self.observe(store) {
             Ok(o) => o,
-            Err(m) => return Some(AdapterOutcome::Unavailable { message: format!("cannot observe evidence: {m}") }),
+            Err(m) => {
+                return Some(AdapterOutcome::Unavailable {
+                    message: format!("cannot observe evidence: {m}"),
+                });
+            }
         };
         let classes = store.classifications().unwrap_or_default();
         let Some(o) = obs.object(obj) else {
@@ -107,57 +127,91 @@ impl<'a> Gateway<'a> {
         if effective_kind(o, &classes) != kind {
             return Some(AdapterOutcome::Rejected {
                 category: "evidence_mismatch".into(),
-                message: format!("evidence object {obj} is {} not {kind}", effective_kind(o, &classes)),
+                message: format!(
+                    "evidence object {obj} is {} not {kind}",
+                    effective_kind(o, &classes)
+                ),
             });
         }
         let at_ok = if want_tray {
-            obs.location(&o.location_id).is_some_and(|l| l.loc_type == LocationType::Tray)
+            obs.location(&o.location_id)
+                .is_some_and(|l| l.loc_type == LocationType::Tray)
         } else {
             o.location_id == bin_for_kind(kind)
         };
         if !at_ok {
             return Some(AdapterOutcome::Rejected {
                 category: "evidence_mismatch".into(),
-                message: format!("evidence object {obj} is at {}, which does not support this record", o.location_id),
+                message: format!(
+                    "evidence object {obj} is at {}, which does not support this record",
+                    o.location_id
+                ),
             });
         }
         None
     }
 
-    pub fn dispatch(&mut self, store: &mut RunStore, op_key: &str, capability: &str, version: &str, args: &Value) -> DispatchOutcome {
+    pub fn dispatch(
+        &mut self,
+        store: &mut RunStore,
+        op_key: &str,
+        capability: &str,
+        version: &str,
+        args: &Value,
+    ) -> DispatchOutcome {
         if let Err(d) = self.policy.authorize(capability, version, args) {
-            let _ = store.event("policy_denied", &format!("policy denied {capability}: {d}"), None, None);
+            let _ = store.event(
+                "policy_denied",
+                &format!("policy denied {capability}: {d}"),
+                None,
+                None,
+            );
             return DispatchOutcome::Denied(d);
         }
         let Some(contract) = capability::lookup(capability) else {
             return DispatchOutcome::Invalid(format!("no contract for {capability}"));
         };
         if contract.version != version {
-            return DispatchOutcome::Invalid(format!("{capability} version {version} is not registered (have {})", contract.version));
+            return DispatchOutcome::Invalid(format!(
+                "{capability} version {version} is not registered (have {})",
+                contract.version
+            ));
         }
         if let Err(e) = check_arg_types(&contract, args) {
             return DispatchOutcome::Invalid(e);
         }
-        let s = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+        let s = |k: &str| {
+            args.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
         let (outcome, fired) = match capability {
             "workspace.pick" => self.world.pick(op_key, &s("object_id"), &s("source_id")),
-            "workspace.place" => self.world.place(op_key, &s("object_id"), &s("destination_id")),
+            "workspace.place" => self
+                .world
+                .place(op_key, &s("object_id"), &s("destination_id")),
             c if c.starts_with("inventory.") => {
                 // Idempotent replays must not re-check evidence (the world may have moved on).
-                let replay = matches!(inventory::status(store, op_key), StatusResult::Applied { .. } | StatusResult::Rejected { .. });
-                if !replay {
-                    if let Some(o) = self.check_evidence(store, capability, args) {
-                        return DispatchOutcome::Adapter(o);
-                    }
+                let replay = matches!(
+                    inventory::status(store, op_key),
+                    StatusResult::Applied { .. } | StatusResult::Rejected { .. }
+                );
+                if !replay && let Some(o) = self.check_evidence(store, capability, args) {
+                    return DispatchOutcome::Adapter(o);
                 }
                 (inventory::apply(store, op_key, capability, args), vec![])
             }
-            other => return DispatchOutcome::Invalid(format!("{other} cannot be dispatched as an action")),
-        };
-        if !fired.is_empty() {
-            if let Some(h) = self.hook.as_deref_mut() {
-                h.on_due(store, &fired);
+            other => {
+                return DispatchOutcome::Invalid(format!(
+                    "{other} cannot be dispatched as an action"
+                ));
             }
+        };
+        if !fired.is_empty()
+            && let Some(h) = self.hook.as_deref_mut()
+        {
+            h.on_due(store, &fired);
         }
         DispatchOutcome::Adapter(outcome)
     }

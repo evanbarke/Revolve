@@ -8,7 +8,7 @@ use revolve::sim::SimWorld;
 use revolve::store::*;
 use revolve::util::{Error, Result};
 use revolve::{capability, compiler, eval, inventory, server};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -16,13 +16,27 @@ use std::process::ExitCode;
 const EXIT_UNAVAILABLE: u8 = 3;
 
 #[derive(Parser)]
-#[command(name = "revolve", version, about = "Revolve: explicit-intent execution runtime prototype (offline simulator)")]
+#[command(
+    name = "revolve",
+    version,
+    about = "Revolve: explicit-intent execution runtime prototype (offline simulator)"
+)]
 struct Cli {
     /// Project-local state directory (runs, benchmark output). Env: REVOLVE_STATE_DIR.
-    #[arg(long, global = true, env = "REVOLVE_STATE_DIR", default_value = "state")]
+    #[arg(
+        long,
+        global = true,
+        env = "REVOLVE_STATE_DIR",
+        default_value = "state"
+    )]
     state_dir: PathBuf,
     /// Scenario directory. Env: REVOLVE_SCENARIOS_DIR.
-    #[arg(long, global = true, env = "REVOLVE_SCENARIOS_DIR", default_value = "scenarios")]
+    #[arg(
+        long,
+        global = true,
+        env = "REVOLVE_SCENARIOS_DIR",
+        default_value = "scenarios"
+    )]
     scenarios_dir: PathBuf,
     #[command(subcommand)]
     cmd: Cmd,
@@ -193,7 +207,9 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             eprintln!("error: {e}");
-            if e.msg.contains("unavailable") && e.msg.contains("live planner") || e.msg.contains("not set") {
+            if e.msg.contains("unavailable") && e.msg.contains("live planner")
+                || e.msg.contains("not set")
+            {
                 ExitCode::from(EXIT_UNAVAILABLE)
             } else {
                 ExitCode::from(1)
@@ -202,7 +218,13 @@ fn main() -> ExitCode {
     }
 }
 
-fn planner_choice(planner: &str, plan: Option<&PathBuf>, config: &Path, budget: Option<u32>, state_dir: &Path) -> Result<PlannerChoice> {
+fn planner_choice(
+    planner: &str,
+    plan: Option<&PathBuf>,
+    config: &Path,
+    budget: Option<u32>,
+    state_dir: &Path,
+) -> Result<PlannerChoice> {
     if let Some(p) = plan {
         return Ok(PlannerChoice::Fixed(p.clone()));
     }
@@ -217,19 +239,33 @@ fn planner_choice(planner: &str, plan: Option<&PathBuf>, config: &Path, budget: 
             }
             let cfg = LiveConfig::load(config)?;
             if !cfg.key_present() {
-                return Err(Error::new(format!("live planner unavailable: environment variable {} is not set. Offline modes remain available.", cfg.api_key_env)));
+                return Err(Error::new(format!(
+                    "live planner unavailable: environment variable {} is not set. Offline modes remain available.",
+                    cfg.api_key_env
+                )));
             }
             let Some(b) = budget else {
-                return Err(Error::new("live planner requires an explicit --budget <max HTTP calls>; no calls were made"));
+                return Err(Error::new(
+                    "live planner requires an explicit --budget <max HTTP calls>; no calls were made",
+                ));
             };
             let dir = state_dir.join("budgets");
             std::fs::create_dir_all(&dir)?;
             let path = dir.join(format!("{}.json", revolve::util::fresh_id("budget")));
             BudgetLedger::init(&path, b)?;
-            eprintln!("[revolve] live planner {} with a budget of {b} HTTP call(s); ledger {}", cfg.model, path.display());
-            Ok(PlannerChoice::Live { config: config.to_path_buf(), budget: path })
+            eprintln!(
+                "[revolve] live planner {} with a budget of {b} HTTP call(s); ledger {}",
+                cfg.model,
+                path.display()
+            );
+            Ok(PlannerChoice::Live {
+                config: config.to_path_buf(),
+                budget: path,
+            })
         }
-        other => Err(Error::new(format!("unknown planner `{other}` (scripted | configured)"))),
+        other => Err(Error::new(format!(
+            "unknown planner `{other}` (scripted | configured)"
+        ))),
     }
 }
 
@@ -262,7 +298,16 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
                 for c in reg {
                     println!(
                         "{} v{} [{:?}; idempotency_key={}, status_lookup={}, completion={:?}, plan_step={}]\n    {}\n    pre: {}\n    effects: {}",
-                        c.id, c.version, c.effect_class, c.idempotency_key, c.status_lookup, c.completion, c.plan_step_allowed, c.summary, c.preconditions, c.effects
+                        c.id,
+                        c.version,
+                        c.effect_class,
+                        c.idempotency_key,
+                        c.status_lookup,
+                        c.completion,
+                        c.plan_step_allowed,
+                        c.summary,
+                        c.preconditions,
+                        c.effects
                     );
                 }
             }
@@ -279,11 +324,23 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
                 Ok(ExitCode::from(1))
             }
         },
-        Cmd::Demo { scenario: name, planner, arm, planner_config, budget, step_delay_ms, quiet } => {
+        Cmd::Demo {
+            scenario: name,
+            planner,
+            arm,
+            planner_config,
+            budget,
+            step_delay_ms,
+            quiet,
+        } => {
             let sc = load_scenario(&name, &cli.scenarios_dir)?;
             let choice = planner_choice(&planner, None, &planner_config, budget, sd)?;
-            let (run_id, dir) = harness::create_run(sd, &sc, Arm::parse(&arm)?, &choice, "scripted")?;
-            println!("run {run_id}  scenario {}  arm {arm}  planner {planner}", sc.id);
+            let (run_id, dir) =
+                harness::create_run(sd, &sc, Arm::parse(&arm)?, &choice, "scripted")?;
+            println!(
+                "run {run_id}  scenario {}  arm {arm}  planner {planner}",
+                sc.id
+            );
             println!("state: {}", dir.display());
             let log = harness::supervise(sd, &run_id, step_delay_ms, quiet)?;
             print_status(&dir, false)?;
@@ -298,32 +355,73 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             println!("{}", eval::summarize_verdict(&ev));
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::New { scenario: name, planner, arm, plan, planner_config, budget, scripted_human } => {
+        Cmd::New {
+            scenario: name,
+            planner,
+            arm,
+            plan,
+            planner_config,
+            budget,
+            scripted_human,
+        } => {
             let sc = load_scenario(&name, &cli.scenarios_dir)?;
             let choice = planner_choice(&planner, plan.as_ref(), &planner_config, budget, sd)?;
-            let (run_id, _dir) = harness::create_run(sd, &sc, Arm::parse(&arm)?, &choice, if scripted_human { "scripted" } else { "interactive" })?;
+            let (run_id, _dir) = harness::create_run(
+                sd,
+                &sc,
+                Arm::parse(&arm)?,
+                &choice,
+                if scripted_human {
+                    "scripted"
+                } else {
+                    "interactive"
+                },
+            )?;
             println!("{run_id}");
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Run { scenario: name, plan, step_delay_ms } => {
+        Cmd::Run {
+            scenario: name,
+            plan,
+            step_delay_ms,
+        } => {
             let sc = load_scenario(&name, &cli.scenarios_dir)?;
-            let (run_id, dir) = harness::create_run(sd, &sc, Arm::Revolve, &PlannerChoice::Fixed(plan), "scripted")?;
+            let (run_id, dir) = harness::create_run(
+                sd,
+                &sc,
+                Arm::Revolve,
+                &PlannerChoice::Fixed(plan),
+                "scripted",
+            )?;
             println!("run {run_id}  scenario {}  planner fixed-plan", sc.id);
             let log = harness::supervise(sd, &run_id, step_delay_ms, false)?;
             print_status(&dir, false)?;
-            println!("supervisor: {} executor process(es), {} simulated crash(es)", log.executor_processes, log.simulated_crashes);
+            println!(
+                "supervisor: {} executor process(es), {} simulated crash(es)",
+                log.executor_processes, log.simulated_crashes
+            );
             let ev = eval::evaluate_run(&dir)?;
-            println!("\nindependent evaluation (simulator truth):\n{}", eval::summarize_verdict(&ev));
+            println!(
+                "\nindependent evaluation (simulator truth):\n{}",
+                eval::summarize_verdict(&ev)
+            );
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Resume { run, step_delay_ms, quiet, report_rss } => {
+        Cmd::Resume {
+            run,
+            step_delay_ms,
+            quiet,
+            report_rss,
+        } => {
             let dir = harness::run_dir(sd, &run)?;
-            let opts = ExecOptions { step_delay_ms, quiet, ..Default::default() };
+            let opts = ExecOptions {
+                step_delay_ms,
+                quiet,
+                ..Default::default()
+            };
             let status = harness::drive_in_process(&dir, opts)?;
-            if report_rss {
-                if let Some(b) = revolve::util::peak_rss_bytes() {
-                    println!("peak_rss_bytes={b}");
-                }
+            if report_rss && let Some(b) = revolve::util::peak_rss_bytes() {
+                println!("peak_rss_bytes={b}");
             }
             if !quiet {
                 eprintln!("[revolve] executor exiting with run status `{status}`");
@@ -338,7 +436,10 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
                         let dir = harness::run_dir(sd, r)?;
                         let s = RunStore::open(&dir)?;
                         let (st, meta) = (s.state()?, s.meta()?);
-                        println!("{r}  {:<17} {:<9} {:<10} {}", st.status, meta.arm, meta.planner, meta.scenario_id);
+                        println!(
+                            "{r}  {:<17} {:<9} {:<10} {}",
+                            st.status, meta.arm, meta.planner, meta.scenario_id
+                        );
                     }
                     return Ok(ExitCode::SUCCESS);
                 }
@@ -347,13 +448,19 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             print_status(&dir, json)?;
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Correct { run, goal_file, request } => {
+        Cmd::Correct {
+            run,
+            goal_file,
+            request,
+        } => {
             let dir = harness::run_dir(sd, &run)?;
             let mut store = RunStore::open(&dir)?;
             let goal = match (goal_file, request) {
                 (Some(f), None) => {
-                    let text = std::fs::read_to_string(&f).map_err(|e| Error::new(format!("reading {}: {e}", f.display())))?;
-                    serde_json::from_str(&text).map_err(|e| Error::new(format!("goal file {}: {e}", f.display())))?
+                    let text = std::fs::read_to_string(&f)
+                        .map_err(|e| Error::new(format!("reading {}: {e}", f.display())))?;
+                    serde_json::from_str(&text)
+                        .map_err(|e| Error::new(format!("goal file {}: {e}", f.display())))?
                 }
                 (None, Some(t)) => parse_restricted_request(&t)?,
                 _ => return Err(Error::new("give exactly one of --goal-file or --request")),
@@ -361,17 +468,27 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             let rev = store.submit_goal_revision(&goal, "human (cli)", "correction")?;
             println!("goal revision {rev} recorded: {}", goal.summary());
             if OwnerLock::is_held(&dir) {
-                println!("an executor owns this run and will apply the correction before its next dispatch");
+                println!(
+                    "an executor owns this run and will apply the correction before its next dispatch"
+                );
             } else {
-                println!("no executor is running; `revolve resume --run {run}` will replan against revision {rev}");
+                println!(
+                    "no executor is running; `revolve resume --run {run}` will replan against revision {rev}"
+                );
             }
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Answer { run, question, choice } => {
+        Cmd::Answer {
+            run,
+            question,
+            choice,
+        } => {
             let dir = harness::run_dir(sd, &run)?;
             let mut store = RunStore::open(&dir)?;
             let out = store.answer(question, &choice, "human (cli)")?;
-            println!("answered question #{question}: {out}; run `revolve resume --run {run}` to continue");
+            println!(
+                "answered question #{question}: {out}; run `revolve resume --run {run}` to continue"
+            );
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Pause { run } => {
@@ -385,7 +502,13 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             RunStore::open(&dir)?.request_control("cancel")?;
             if !OwnerLock::is_held(&dir) {
                 println!("cancel requested; no executor running — processing it now");
-                harness::drive_in_process(&dir, ExecOptions { quiet: true, ..Default::default() })?;
+                harness::drive_in_process(
+                    &dir,
+                    ExecOptions {
+                        quiet: true,
+                        ..Default::default()
+                    },
+                )?;
             } else {
                 println!("cancel requested; waiting up to {wait}s for the executor to acknowledge");
                 let t = std::time::Instant::now();
@@ -394,10 +517,19 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
                 }
             }
             let st = RunStore::open(&dir)?.state()?;
-            println!("run status: {} ({})", st.status, st.status_reason.unwrap_or_default());
+            println!(
+                "run status: {} ({})",
+                st.status,
+                st.status_reason.unwrap_or_default()
+            );
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Sim { run, action, location, fault } => {
+        Cmd::Sim {
+            run,
+            action,
+            location,
+            fault,
+        } => {
             let dir = harness::run_dir(sd, &run)?;
             let mut w = SimWorld::open(&dir.join("world.db"))?;
             match action.as_str() {
@@ -410,29 +542,57 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
                     w.set_location_available(&loc, action == "available")?;
                 }
                 "arm-fault" => {
-                    let f: revolve::scenario::FaultSpec = serde_json::from_str(&fault.ok_or_else(|| Error::new("--fault required"))?)?;
+                    let f: revolve::scenario::FaultSpec = serde_json::from_str(
+                        &fault.ok_or_else(|| Error::new("--fault required"))?,
+                    )?;
                     let id = w.arm_fault(&f)?;
                     println!("armed fault #{id}");
                 }
                 other => return Err(Error::new(format!("unknown sim action `{other}`"))),
             }
-            w.log_harness("human_intervention", &json!({"type": "sim_control", "action": action}))?;
+            w.log_harness(
+                "human_intervention",
+                &json!({"type": "sim_control", "action": action}),
+            )?;
             println!("simulation control applied: {action}");
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Validate { plan, scenario: name } => validate(&plan, &name, &cli.scenarios_dir, sd),
-        Cmd::Serve { bind, step_delay_ms } => {
+        Cmd::Validate {
+            plan,
+            scenario: name,
+        } => validate(&plan, &name, &cli.scenarios_dir, sd),
+        Cmd::Serve {
+            bind,
+            step_delay_ms,
+        } => {
             server::serve(&bind, sd, &cli.scenarios_dir, step_delay_ms)?;
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Benchmark { suite, planner, planner_config, budget, trials, out, arms } => {
+        Cmd::Benchmark {
+            suite,
+            planner,
+            planner_config,
+            budget,
+            trials,
+            out,
+            arms,
+        } => {
             let dir = match suite.as_str() {
                 "development" | "held-out" | "demo" => cli.scenarios_dir.join(&suite),
                 other => PathBuf::from(other),
             };
             let choice = planner_choice(&planner, None, &planner_config, budget, sd)?;
-            let arms: Vec<Arm> = arms.split(',').map(|a| Arm::parse(a.trim())).collect::<Result<_>>()?;
-            let out = out.unwrap_or_else(|| sd.join("benchmarks").join(format!("{}-{}", suite.replace(['/', '\\'], "_"), revolve::util::now_ms())));
+            let arms: Vec<Arm> = arms
+                .split(',')
+                .map(|a| Arm::parse(a.trim()))
+                .collect::<Result<_>>()?;
+            let out = out.unwrap_or_else(|| {
+                sd.join("benchmarks").join(format!(
+                    "{}-{}",
+                    suite.replace(['/', '\\'], "_"),
+                    revolve::util::now_ms()
+                ))
+            });
             let summary = eval::run_benchmark(sd, &dir, &choice, &arms, trials, &out)?;
             println!("{summary}");
             println!("results written to {}", out.display());
@@ -442,11 +602,21 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
 }
 
 fn doctor(sd: &Path, scen: &Path) -> Result<ExitCode> {
-    println!("revolve {} ({} {})", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
+    println!(
+        "revolve {} ({} {})",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
     println!("sqlite (bundled): {}", rusqlite::version());
     let tegra = Path::new("/etc/nv_tegra_release");
     if tegra.exists() {
-        let first = std::fs::read_to_string(tegra).unwrap_or_default().lines().next().unwrap_or("").to_string();
+        let first = std::fs::read_to_string(tegra)
+            .unwrap_or_default()
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string();
         println!("jetson: {first}");
     } else {
         println!("jetson: not detected (no /etc/nv_tegra_release)");
@@ -455,9 +625,16 @@ fn doctor(sd: &Path, scen: &Path) -> Result<ExitCode> {
     let probe = sd.join(".doctor-probe");
     let writable = std::fs::write(&probe, b"ok").is_ok();
     let _ = std::fs::remove_file(&probe);
-    println!("state dir {}: {}", sd.display(), if writable { "writable" } else { "NOT writable" });
+    println!(
+        "state dir {}: {}",
+        sd.display(),
+        if writable { "writable" } else { "NOT writable" }
+    );
     for sub in ["demo", "development", "held-out"] {
-        println!("scenarios/{sub}: {} file(s)", scenario::list_dir(&scen.join(sub)).len());
+        println!(
+            "scenarios/{sub}: {} file(s)",
+            scenario::list_dir(&scen.join(sub)).len()
+        );
     }
     let cfg = Path::new("config/planner.json");
     if cfg.exists() {
@@ -472,7 +649,9 @@ fn doctor(sd: &Path, scen: &Path) -> Result<ExitCode> {
             Err(e) => println!("live planner: config invalid: {e}"),
         }
     } else {
-        println!("live planner: not configured (config/planner.json absent) — scripted mode only; live validation not performed");
+        println!(
+            "live planner: not configured (config/planner.json absent) — scripted mode only; live validation not performed"
+        );
     }
     if let Some(b) = revolve::util::peak_rss_bytes() {
         println!("peak RSS of this process: {} KiB", b / 1024);
@@ -483,7 +662,8 @@ fn doctor(sd: &Path, scen: &Path) -> Result<ExitCode> {
 
 fn validate(plan: &Path, name: &str, scen: &Path, sd: &Path) -> Result<ExitCode> {
     let sc = load_scenario(name, scen)?;
-    let text = std::fs::read_to_string(plan).map_err(|e| Error::new(format!("reading {}: {e}", plan.display())))?;
+    let text = std::fs::read_to_string(plan)
+        .map_err(|e| Error::new(format!("reading {}: {e}", plan.display())))?;
     let raw: Value = match serde_json::from_str(&text) {
         Ok(v) => v,
         Err(e) => {
@@ -494,29 +674,34 @@ fn validate(plan: &Path, name: &str, scen: &Path, sd: &Path) -> Result<ExitCode>
     // Compile against a throwaway copy of the scenario's initial world.
     let tmp = sd.join("validate").join(revolve::util::fresh_id("v"));
     std::fs::create_dir_all(&tmp)?;
-    let result = (|| -> Result<std::result::Result<compiler::CompiledPlan, Vec<compiler::Diagnostic>>> {
-        let mut world = SimWorld::create(&tmp.join("world.db"), &sc)?;
-        let obs = world.observe().map_err(Error::new)?;
-        let inv = inventory::InventoryView { on_hand: sc.inventory_record(), reserved: Default::default(), reservations: vec![] };
-        let policy = revolve::policy::Policy::default();
-        let goal_id = format!("goal-{}", sc.id);
-        Ok(compiler::parse_proposal(&raw).and_then(|p| {
-            compiler::compile(
-                &p,
-                &compiler::CompileContext {
-                    goal_id: &goal_id,
-                    goal_revision: 1,
-                    goal: &sc.goal,
-                    observation: &obs,
-                    classifications: &[],
-                    inventory: &inv,
-                    consumed_evidence: &[],
-                    policy: &policy,
-                    limits: compiler::Limits::default(),
-                },
-            )
-        }))
-    })();
+    let result =
+        (|| -> Result<std::result::Result<compiler::CompiledPlan, Vec<compiler::Diagnostic>>> {
+            let mut world = SimWorld::create(&tmp.join("world.db"), &sc)?;
+            let obs = world.observe().map_err(Error::new)?;
+            let inv = inventory::InventoryView {
+                on_hand: sc.inventory_record(),
+                reserved: Default::default(),
+                reservations: vec![],
+            };
+            let policy = revolve::policy::Policy::default();
+            let goal_id = format!("goal-{}", sc.id);
+            Ok(compiler::parse_proposal(&raw).and_then(|p| {
+                compiler::compile(
+                    &p,
+                    &compiler::CompileContext {
+                        goal_id: &goal_id,
+                        goal_revision: 1,
+                        goal: &sc.goal,
+                        observation: &obs,
+                        classifications: &[],
+                        inventory: &inv,
+                        consumed_evidence: &[],
+                        policy: &policy,
+                        limits: compiler::Limits::default(),
+                    },
+                )
+            }))
+        })();
     let _ = std::fs::remove_dir_all(&tmp);
     match result? {
         Ok(cp) => {
@@ -525,13 +710,23 @@ fn validate(plan: &Path, name: &str, scen: &Path, sd: &Path) -> Result<ExitCode>
                 cp.steps.len(),
                 cp.predicted_complete_trays.join(", ")
             );
-            println!("(checked: schema, structure, binding, authorisation, budget, belief-level feasibility — not execution)");
+            println!(
+                "(checked: schema, structure, binding, authorisation, budget, belief-level feasibility — not execution)"
+            );
             Ok(ExitCode::SUCCESS)
         }
         Err(diags) => {
             println!("INVALID: {} diagnostic(s)", diags.len());
             for d in diags {
-                println!("  [{:?}] {}{}: {}", d.category, d.step_id.map(|s| format!("step `{s}` ")).unwrap_or_default(), d.path, d.message);
+                println!(
+                    "  [{:?}] {}{}: {}",
+                    d.category,
+                    d.step_id
+                        .map(|s| format!("step `{s}` "))
+                        .unwrap_or_default(),
+                    d.path,
+                    d.message
+                );
             }
             Ok(ExitCode::from(1))
         }
@@ -557,17 +752,50 @@ fn print_status(dir: &Path, as_json: bool) -> Result<()> {
         return Ok(());
     }
     println!("\n== run {} ==", meta.run_id);
-    println!("scenario {} | arm {} | planner {} | human {}", meta.scenario_id, meta.arm, meta.planner, meta.human_mode);
-    println!("status: {}{}", st.status, st.status_reason.as_ref().map(|r| format!(" — {r}")).unwrap_or_default());
+    println!(
+        "scenario {} | arm {} | planner {} | human {}",
+        meta.scenario_id, meta.arm, meta.planner, meta.human_mode
+    );
+    println!(
+        "status: {}{}",
+        st.status,
+        st.status_reason
+            .as_ref()
+            .map(|r| format!(" — {r}"))
+            .unwrap_or_default()
+    );
     println!("goal r{rev}: {}", goal.summary());
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
     for a in &actions {
         *counts.entry(a.status.clone()).or_default() += 1;
     }
-    println!("actions: {}", counts.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" "));
-    println!("inventory record: {}", inv.on_hand.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" "));
+    println!(
+        "actions: {}",
+        counts
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    println!(
+        "inventory record: {}",
+        inv.on_hand
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
     for q in store.open_questions()? {
-        println!("OPEN QUESTION #{}: {}  options: {}", q.question_id, q.prompt, q.options.iter().map(|o| o.id.clone()).collect::<Vec<_>>().join(" | "));
+        println!(
+            "OPEN QUESTION #{}: {}  options: {}",
+            q.question_id,
+            q.prompt,
+            q.options
+                .iter()
+                .map(|o| o.id.clone())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
     }
     if let Some(r) = &st.final_report {
         if r.get("claims_source").and_then(Value::as_str) == Some("agent") {
@@ -575,10 +803,10 @@ fn print_status(dir: &Path, as_json: bool) -> Result<()> {
         } else {
             println!("verified complete kits: {}", r["kits_verified_complete"]);
             println!("missing to finish: {}", r["missing_to_finish"]);
-            if let Some(d) = r["inventory_discrepancies"].as_array() {
-                if !d.is_empty() {
-                    println!("inventory discrepancies: {}", r["inventory_discrepancies"]);
-                }
+            if let Some(d) = r["inventory_discrepancies"].as_array()
+                && !d.is_empty()
+            {
+                println!("inventory discrepancies: {}", r["inventory_discrepancies"]);
             }
             if let Some(n) = r["notes"].as_array() {
                 for note in n {

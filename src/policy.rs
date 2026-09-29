@@ -54,20 +54,46 @@ impl Default for Policy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "denial", rename_all = "snake_case")]
 pub enum Denial {
-    CapabilityNotGranted { capability: String },
-    VersionNotGranted { capability: String, requested: String, granted: String },
-    ArgumentOutOfScope { capability: String, argument: String, reason: String },
+    CapabilityNotGranted {
+        capability: String,
+    },
+    VersionNotGranted {
+        capability: String,
+        requested: String,
+        granted: String,
+    },
+    ArgumentOutOfScope {
+        capability: String,
+        argument: String,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for Denial {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Denial::CapabilityNotGranted { capability } => write!(f, "capability `{capability}` is not granted to this run"),
-            Denial::VersionNotGranted { capability, requested, granted } => {
-                write!(f, "`{capability}` version {requested} requested but only version {granted} is granted")
+            Denial::CapabilityNotGranted { capability } => {
+                write!(f, "capability `{capability}` is not granted to this run")
             }
-            Denial::ArgumentOutOfScope { capability, argument, reason } => {
-                write!(f, "`{capability}` argument `{argument}` is outside the granted scope: {reason}")
+            Denial::VersionNotGranted {
+                capability,
+                requested,
+                granted,
+            } => {
+                write!(
+                    f,
+                    "`{capability}` version {requested} requested but only version {granted} is granted"
+                )
+            }
+            Denial::ArgumentOutOfScope {
+                capability,
+                argument,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "`{capability}` argument `{argument}` is outside the granted scope: {reason}"
+                )
             }
         }
     }
@@ -76,7 +102,9 @@ impl std::fmt::Display for Denial {
 impl Policy {
     pub fn check_capability(&self, capability: &str, version: &str) -> Result<(), Denial> {
         match self.grants.get(capability) {
-            None => Err(Denial::CapabilityNotGranted { capability: capability.into() }),
+            None => Err(Denial::CapabilityNotGranted {
+                capability: capability.into(),
+            }),
             Some(g) if g != version => Err(Denial::VersionNotGranted {
                 capability: capability.into(),
                 requested: version.into(),
@@ -88,7 +116,11 @@ impl Policy {
 
     /// Check argument scope. Arguments that are unresolved references are skipped
     /// here (they are type-checked by the compiler and re-checked at dispatch).
-    pub fn check_arguments(&self, capability: &str, args: &serde_json::Map<String, Value>) -> Result<(), Denial> {
+    pub fn check_arguments(
+        &self,
+        capability: &str,
+        args: &serde_json::Map<String, Value>,
+    ) -> Result<(), Denial> {
         let deny = |arg: &str, reason: String| Denial::ArgumentOutOfScope {
             capability: capability.into(),
             argument: arg.into(),
@@ -98,20 +130,35 @@ impl Policy {
         let str_arg = |k: &str| args.get(k).filter(|v| !is_ref(v)).and_then(Value::as_str);
         match capability {
             "workspace.pick" => {
-                if let Some(src) = str_arg("source_id") {
-                    if !self.pick_sources.iter().any(|p| src.starts_with(p.as_str())) {
-                        return Err(deny("source_id", format!("`{src}` is not a granted pick source ({})", self.pick_sources.join(", "))));
-                    }
+                if let Some(src) = str_arg("source_id")
+                    && !self
+                        .pick_sources
+                        .iter()
+                        .any(|p| src.starts_with(p.as_str()))
+                {
+                    return Err(deny(
+                        "source_id",
+                        format!(
+                            "`{src}` is not a granted pick source ({})",
+                            self.pick_sources.join(", ")
+                        ),
+                    ));
                 }
             }
             "workspace.place" => {
-                if let Some(dst) = str_arg("destination_id") {
-                    if !self.place_destinations.iter().any(|p| dst.starts_with(p.as_str())) {
-                        return Err(deny(
-                            "destination_id",
-                            format!("`{dst}` is not a granted destination ({})", self.place_destinations.join(", ")),
-                        ));
-                    }
+                if let Some(dst) = str_arg("destination_id")
+                    && !self
+                        .place_destinations
+                        .iter()
+                        .any(|p| dst.starts_with(p.as_str()))
+                {
+                    return Err(deny(
+                        "destination_id",
+                        format!(
+                            "`{dst}` is not a granted destination ({})",
+                            self.place_destinations.join(", ")
+                        ),
+                    ));
                 }
             }
             "inventory.reserve" => {
@@ -123,27 +170,42 @@ impl Policy {
                             return Err(deny("counts", format!("unknown part kind `{k}`")));
                         }
                         if *n > self.max_reserve_per_kind {
-                            return Err(deny("counts", format!("{n} x {k} exceeds the per-kind limit {}", self.max_reserve_per_kind)));
+                            return Err(deny(
+                                "counts",
+                                format!(
+                                    "{n} x {k} exceeds the per-kind limit {}",
+                                    self.max_reserve_per_kind
+                                ),
+                            ));
                         }
                         total += n;
                     }
                     if total > self.max_reserve_total {
-                        return Err(deny("counts", format!("total {total} exceeds the limit {}", self.max_reserve_total)));
+                        return Err(deny(
+                            "counts",
+                            format!("total {total} exceeds the limit {}", self.max_reserve_total),
+                        ));
                     }
                 }
             }
             "inventory.consume" | "inventory.return" => {
-                if let Some(q) = args.get("quantity").and_then(Value::as_u64) {
-                    if q == 0 || q > self.max_units_per_record as u64 {
-                        return Err(deny("quantity", format!("must be 1..={}", self.max_units_per_record)));
-                    }
+                if let Some(q) = args.get("quantity").and_then(Value::as_u64)
+                    && (q == 0 || q > self.max_units_per_record as u64)
+                {
+                    return Err(deny(
+                        "quantity",
+                        format!("must be 1..={}", self.max_units_per_record),
+                    ));
                 }
             }
             "inventory.adjust_count" => {
-                if let Some(q) = args.get("observed_count").and_then(Value::as_u64) {
-                    if q > self.max_adjust_count as u64 {
-                        return Err(deny("observed_count", format!("exceeds the limit {}", self.max_adjust_count)));
-                    }
+                if let Some(q) = args.get("observed_count").and_then(Value::as_u64)
+                    && q > self.max_adjust_count as u64
+                {
+                    return Err(deny(
+                        "observed_count",
+                        format!("exceeds the limit {}", self.max_adjust_count),
+                    ));
                 }
             }
             _ => {}
@@ -166,17 +228,38 @@ mod tests {
     #[test]
     fn denies_ungranted_capability_and_version() {
         let p = Policy::default();
-        assert!(matches!(p.authorize("system.shell", "1", &json!({})), Err(Denial::CapabilityNotGranted { .. })));
-        assert!(matches!(p.authorize("workspace.pick", "2", &json!({})), Err(Denial::VersionNotGranted { .. })));
+        assert!(matches!(
+            p.authorize("system.shell", "1", &json!({})),
+            Err(Denial::CapabilityNotGranted { .. })
+        ));
+        assert!(matches!(
+            p.authorize("workspace.pick", "2", &json!({})),
+            Err(Denial::VersionNotGranted { .. })
+        ));
     }
 
     #[test]
     fn denies_out_of_scope_arguments() {
         let p = Policy::default();
-        let r = p.authorize("workspace.place", "1", &json!({"object_id": "red-01", "destination_id": "outside"}));
+        let r = p.authorize(
+            "workspace.place",
+            "1",
+            &json!({"object_id": "red-01", "destination_id": "outside"}),
+        );
         assert!(matches!(r, Err(Denial::ArgumentOutOfScope { .. })));
-        let r = p.authorize("inventory.reserve", "1", &json!({"counts": {"washer": 500}}));
+        let r = p.authorize(
+            "inventory.reserve",
+            "1",
+            &json!({"counts": {"washer": 500}}),
+        );
         assert!(matches!(r, Err(Denial::ArgumentOutOfScope { .. })));
-        assert!(p.authorize("workspace.place", "1", &json!({"object_id": "red-01", "destination_id": "tray-1"})).is_ok());
+        assert!(
+            p.authorize(
+                "workspace.place",
+                "1",
+                &json!({"object_id": "red-01", "destination_id": "tray-1"})
+            )
+            .is_ok()
+        );
     }
 }
