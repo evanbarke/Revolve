@@ -205,10 +205,15 @@ enum Cmd {
     },
     /// Serve the browser UI (loopback only).
     Serve {
-        #[arg(long, default_value = "127.0.0.1:8080")]
-        bind: String,
+        /// Default: 127.0.0.1:8080 (this computer only); with --lan: 0.0.0.0:8080.
+        #[arg(long)]
+        bind: Option<String>,
         #[arg(long, default_value_t = 400)]
         step_delay_ms: u64,
+        /// Also serve devices on your private network (home Wi-Fi, Tailscale),
+        /// each with the access key printed at start. Never public addresses.
+        #[arg(long)]
+        lan: bool,
     },
     /// Revolve Script programs: check, rehearse and run (see docs/language.md).
     Script {
@@ -828,8 +833,16 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
         Cmd::Serve {
             bind,
             step_delay_ms,
+            lan,
         } => {
-            server::serve(&bind, sd, &cli.scenarios_dir, step_delay_ms)?;
+            let bind = bind.unwrap_or_else(|| {
+                if lan {
+                    "0.0.0.0:8080".into()
+                } else {
+                    "127.0.0.1:8080".into()
+                }
+            });
+            server::serve_with(&bind, sd, &cli.scenarios_dir, step_delay_ms, lan)?;
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Script { cmd } => script_cmd(cmd, sd, &cli.scenarios_dir),

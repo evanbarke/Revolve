@@ -920,6 +920,7 @@ name = "revolve"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "getrandom",
  "rusqlite",
  "serde",
  "serde_json",

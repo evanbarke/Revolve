@@ -87,6 +87,7 @@ revolve answer --run <id> --question <n> --choice <option>
 revolve pause --run <id> | cancel --run <id>
 revolve sim --run <id> restore-evidence | planner-offline | planner-online | unavailable --location tray-2 | arm-fault --fault '<json>'
 revolve serve [--bind 127.0.0.1:8080]
+revolve serve --lan                  # also tablets/phones on your private network, with an access key
 revolve benchmark --suite development|held-out [--planner scripted|configured --budget N] [--trials N]
 ```
 
@@ -119,6 +120,17 @@ crash (executor only).
 cargo test            # unit + integration (includes real subprocess crash tests)
 cargo clippy --all-targets && cargo fmt --check
 ```
+
+## Using it from a tablet or phone (LAN mode)
+
+`revolve serve --lan` also accepts devices on your private network (home Wi-Fi,
+Tailscale). It prints a link with an access key: open
+`http://<this computer's IP>:8080/?key=<key>` once on the device, and the key
+is then kept in a strict cookie. Public addresses are refused, DNS names in the
+Host header are refused, and the key (128 random bits) is stored in
+`<state-dir>/lan-access-key`; delete that file to issue a new one. Windows
+Firewall must allow `revolve.exe` on **private** networks; Revolve never
+changes the firewall itself.
 
 ## Documentation
 

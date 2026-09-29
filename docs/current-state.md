@@ -95,6 +95,17 @@ human actions after a crash, UI GET Host check and scenario paths) were all
 fixed, each with a regression test in `tests/review_regressions.rs` or the
 server unit tests.
 
+## LAN mode
+
+`revolve serve --lan` (opt-in) serves private-network devices with a 128-bit
+access key (link once, then an HttpOnly SameSite=Strict cookie); public peers
+and DNS-name Hosts are refused; mutations keep the custom-header and origin
+checks. Verified with curl from the LAN address: no key or a wrong key gives
+401; the right key gives a 303 and the cookie; with the cookie, pages and the
+API give 200; a DNS-name Host gives 403; a POST without the custom header gives
+403; loopback needs no key. Windows Firewall must allow the program on private
+networks (the owner's choice; Revolve does not change the firewall).
+
 ## Known limitations / open issues
 
 - Scripted planner assigns trays before checking destination availability at

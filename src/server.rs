@@ -6,10 +6,18 @@
 //! simulation controls write to the same stores through the same functions the
 //! CLI uses. Status is read from persisted state on every poll.
 //!
-//! Request boundary: non-loopback binds are refused. Mutating requests must
-//! carry `X-Revolve-Client: ui` (a custom header, so cross-site pages cannot send
-//! it without a CORS preflight the server never approves), a matching Host header
-//! (DNS-rebinding guard) and, if present, a matching Origin.
+//! Request boundary: by default only loopback binds are allowed. Mutating
+//! requests must carry `X-Revolve-Client: ui` (a custom header, so cross-site
+//! pages cannot send it without a CORS preflight the server never approves), a
+//! matching Host header (DNS-rebinding guard) and, if present, a matching Origin.
+//!
+//! LAN mode (`serve --lan`, opt-in) adds, for every request from another device:
+//! the peer must be on a private network (RFC 1918, link-local, 100.64/10 as used
+//! by Tailscale, IPv6 ULA/link-local); the Host must be an IP address (names are
+//! refused, so DNS rebinding cannot reach it); and the device must present the
+//! access key, once in the link (`/?key=...`) and then as a SameSite=Strict,
+//! HttpOnly cookie. The key is 128 random bits kept in the state directory.
+//! Requests from this computer (loopback) need no key.
 
 use crate::harness::{self, Arm, PlannerChoice};
 use crate::inventory;
@@ -45,6 +53,8 @@ fn build_id() -> &'static str {
 }
 
 struct Ctx {
+    /// LAN mode: the access key other devices must present.
+    lan_key: Option<String>,
     state_dir: PathBuf,
     scenarios_dir: PathBuf,
     step_delay_ms: u64,
@@ -65,19 +75,138 @@ pub fn check_bind(bind: &str) -> Result<SocketAddr> {
     Ok(addr)
 }
 
+/// LAN mode binds: the unspecified address, loopback, or a private address. Never public.
+pub fn check_bind_lan(bind: &str) -> Result<SocketAddr> {
+    let addr: SocketAddr = bind
+        .parse()
+        .map_err(|e| Error::new(format!("invalid --bind `{bind}`: {e}")))?;
+    if !(addr.ip().is_unspecified() || is_private_ip(addr.ip())) {
+        crate::bail!(
+            "refusing to bind {addr} in LAN mode: only private network addresses (or 0.0.0.0) are allowed"
+        );
+    }
+    Ok(addr)
+}
+
+/// Home/office networks, link-local, Tailscale (100.64/10) and loopback.
+pub fn is_private_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(a) => {
+            let o = a.octets();
+            a.is_loopback()
+                || a.is_private()
+                || a.is_link_local()
+                || (o[0] == 100 && (o[1] & 0xC0) == 64)
+        }
+        std::net::IpAddr::V6(a) => {
+            let s0 = a.segments()[0];
+            a.is_loopback()
+                || (s0 & 0xfe00) == 0xfc00
+                || (s0 & 0xffc0) == 0xfe80
+                || a.to_ipv4_mapped()
+                    .is_some_and(|v4| is_private_ip(std::net::IpAddr::V4(v4)))
+        }
+    }
+}
+
+/// A Host header naming an IP address (plus port), never a DNS name.
+fn is_ip_authority(a: &str) -> bool {
+    if let Some(rest) = a.strip_prefix('[') {
+        return rest
+            .split(']')
+            .next()
+            .is_some_and(|h| h.parse::<std::net::Ipv6Addr>().is_ok());
+    }
+    let host = a.rsplit_once(':').map(|(h, _)| h).unwrap_or(a);
+    host.parse::<std::net::Ipv4Addr>().is_ok()
+}
+
+/// LAN-mode boundary for mutating requests: the custom header, an IP-literal or
+/// loopback Host, and an Origin (if any) naming exactly that host.
+pub fn mutation_allowed_lan(
+    host: Option<&str>,
+    origin: Option<&str>,
+    client: Option<&str>,
+) -> std::result::Result<(), &'static str> {
+    if client != Some("ui") {
+        return Err("missing X-Revolve-Client header");
+    }
+    let Some(h) = host.filter(|h| is_loopback_authority(h) || is_ip_authority(h)) else {
+        return Err("unexpected Host header");
+    };
+    if let Some(o) = origin
+        && o.trim_start_matches("http://") != h
+    {
+        return Err("cross-origin request refused");
+    }
+    Ok(())
+}
+
+fn same_secret(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+            == 0
+}
+
+/// The LAN access key: created once (128 random bits) and kept in the state directory.
+fn lan_key(state_dir: &Path) -> Result<String> {
+    let p = state_dir.join("lan-access-key");
+    if let Ok(k) = std::fs::read_to_string(&p) {
+        let k = k.trim().to_string();
+        if k.len() == 32 && k.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(k);
+        }
+    }
+    let mut buf = [0u8; 16];
+    getrandom::getrandom(&mut buf)
+        .map_err(|e| Error::new(format!("no OS randomness for the access key: {e}")))?;
+    let k: String = buf.iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::write(&p, &k)?;
+    Ok(k)
+}
+
 pub fn serve(bind: &str, state_dir: &Path, scenarios_dir: &Path, step_delay_ms: u64) -> Result<()> {
-    let addr = check_bind(bind)?;
+    serve_with(bind, state_dir, scenarios_dir, step_delay_ms, false)
+}
+
+pub fn serve_with(
+    bind: &str,
+    state_dir: &Path,
+    scenarios_dir: &Path,
+    step_delay_ms: u64,
+    lan: bool,
+) -> Result<()> {
+    let addr = if lan {
+        check_bind_lan(bind)?
+    } else {
+        check_bind(bind)?
+    };
     std::fs::create_dir_all(state_dir)?;
+    let key = if lan { Some(lan_key(state_dir)?) } else { None };
     let server =
         Server::http(addr).map_err(|e| Error::new(format!("cannot listen on {addr}: {e}")))?;
     let ctx = Arc::new(Ctx {
+        lan_key: key.clone(),
         state_dir: state_dir.to_path_buf(),
         scenarios_dir: scenarios_dir.to_path_buf(),
         step_delay_ms,
         children: Mutex::new(HashMap::new()),
         exe: std::env::current_exe()?,
     });
-    eprintln!("[revolve] UI on http://{addr}/ (loopback only; Ctrl+C to stop)");
+    match &key {
+        None => eprintln!("[revolve] UI on http://{addr}/ (loopback only; Ctrl+C to stop)"),
+        Some(k) => {
+            eprintln!(
+                "[revolve] UI on http://{addr}/ (LAN mode: private networks only; Ctrl+C to stop)"
+            );
+            eprintln!(
+                "[revolve] on another device open http://<this computer's IP>:{}/?key={k}  (keep this link private)",
+                addr.port()
+            );
+        }
+    }
     for req in server.incoming_requests() {
         let ctx = ctx.clone();
         std::thread::spawn(move || handle(&ctx, req));
@@ -153,9 +282,64 @@ fn handle(ctx: &Ctx, mut req: Request) {
     let url = req.url().to_string();
     let path = url.split('?').next().unwrap_or("").to_string();
     let method = req.method().clone();
-    // DNS-rebinding guard for every request, reads included: only loopback Host names.
-    if !get_header(&req, "Host").is_some_and(is_loopback_authority) {
+    let peer = req.remote_addr().map(|a| a.ip());
+    let from_here = peer.is_some_and(|ip| ip.is_loopback());
+    // DNS-rebinding guard for every request, reads included: only loopback Host
+    // names (or, in LAN mode, IP addresses).
+    let host_ok =
+        |h: &str| is_loopback_authority(h) || (ctx.lan_key.is_some() && is_ip_authority(h));
+    if !get_header(&req, "Host").is_some_and(host_ok) {
         return json_resp(req, 403, &json!({"error": "unexpected Host header"}));
+    }
+    if let Some(key) = &ctx.lan_key
+        && !from_here
+    {
+        if !peer.is_some_and(is_private_ip) {
+            return json_resp(
+                req,
+                403,
+                &json!({"error": "only devices on a private network may connect"}),
+            );
+        }
+        // The key arrives once in the link; it is then kept as a strict cookie.
+        let query_key = url
+            .split_once('?')
+            .and_then(|(_, q)| q.split('&').find_map(|kv| kv.strip_prefix("key=")))
+            .map(str::to_string);
+        if let Some(k) = query_key {
+            if same_secret(&k, key) {
+                let resp = Response::empty(303)
+                    .with_header(header(
+                        "Location",
+                        if path.is_empty() { "/" } else { &path },
+                    ))
+                    .with_header(header("Cache-Control", "no-store"))
+                    .with_header(header("Referrer-Policy", "no-referrer"))
+                    .with_header(header(
+                        "Set-Cookie",
+                        &format!(
+                            "revolve_key={key}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"
+                        ),
+                    ));
+                let _ = req.respond(resp);
+                return;
+            }
+            return respond(
+                req,
+                401,
+                "text/plain; charset=utf-8",
+                "That access key is not right. Use the link printed by `revolve serve --lan`."
+                    .into(),
+            );
+        }
+        let cookie_ok = get_header(&req, "Cookie").is_some_and(|c| {
+            c.split(';')
+                .filter_map(|kv| kv.trim().strip_prefix("revolve_key="))
+                .any(|v| same_secret(v, key))
+        });
+        if !cookie_ok {
+            return respond(req, 401, "text/plain; charset=utf-8", "This page needs the access link printed by `revolve serve --lan` on the computer running Revolve.".into());
+        }
     }
     if method == Method::Get {
         match path.as_str() {
@@ -172,8 +356,13 @@ fn handle(ctx: &Ctx, mut req: Request) {
             _ => {}
         }
     }
+    let boundary = if ctx.lan_key.is_some() {
+        mutation_allowed_lan
+    } else {
+        mutation_allowed
+    };
     if method == Method::Post
-        && let Err(why) = mutation_allowed(
+        && let Err(why) = boundary(
             get_header(&req, "Host"),
             get_header(&req, "Origin"),
             get_header(&req, "X-Revolve-Client"),
@@ -993,6 +1182,64 @@ mod tests {
         ] {
             assert!(!is_loopback_authority(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn lan_mode_accepts_private_networks_and_ip_hosts_only() {
+        use std::net::IpAddr;
+        for ok in [
+            "192.168.1.60",
+            "10.0.0.5",
+            "172.20.1.1",
+            "100.91.63.20",
+            "127.0.0.1",
+            "fd7a:115c:a1e0::1",
+            "fe80::1",
+            "::1",
+        ] {
+            assert!(is_private_ip(ok.parse::<IpAddr>().unwrap()), "{ok}");
+        }
+        for bad in ["8.8.8.8", "100.128.0.1", "172.32.0.1", "2001:db8::1"] {
+            assert!(!is_private_ip(bad.parse::<IpAddr>().unwrap()), "{bad}");
+        }
+        assert!(check_bind_lan("0.0.0.0:8080").is_ok());
+        assert!(check_bind_lan("192.168.1.60:8080").is_ok());
+        assert!(check_bind_lan("8.8.8.8:8080").is_err());
+        let ui = Some("ui");
+        assert!(
+            mutation_allowed_lan(
+                Some("192.168.1.60:8080"),
+                Some("http://192.168.1.60:8080"),
+                ui
+            )
+            .is_ok()
+        );
+        assert!(mutation_allowed_lan(Some("[fd7a:115c:a1e0::1]:8080"), None, ui).is_ok());
+        assert!(
+            mutation_allowed_lan(Some("192.168.1.60:8080"), None, None).is_err(),
+            "custom header"
+        );
+        assert!(
+            mutation_allowed_lan(Some("evil.example:8080"), None, ui).is_err(),
+            "DNS names refused"
+        );
+        assert!(
+            mutation_allowed_lan(Some("192.168.1.60:8080"), Some("http://evil.example"), ui)
+                .is_err(),
+            "cross-origin"
+        );
+        assert!(
+            mutation_allowed_lan(
+                Some("192.168.1.60:8080"),
+                Some("http://192.168.1.61:8080"),
+                ui
+            )
+            .is_err(),
+            "other origin"
+        );
+        assert!(
+            same_secret("abc", "abc") && !same_secret("abc", "abd") && !same_secret("abc", "ab")
+        );
     }
 
     #[test]
