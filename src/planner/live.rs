@@ -1393,6 +1393,53 @@ mod tests {
     }
 
     #[test]
+    fn program_writing_sends_the_guide_and_table_and_parses_the_program() {
+        let program = "# Clear the table
+for p in parts(at=\"table\"):
+    move(p, \"tray-1\")
+expect count(\"table\") == 0, \"the table is clear\"
+";
+        let (url, h) = fake_server(vec![(
+            200,
+            fixture(
+                json!({"understood": true, "program": program, "explanation": "Everything goes to tray 1.", "not_possible": ""}),
+                "end_turn",
+            ),
+        )]);
+        let (mut p, _b) = fake_planner(&url, 3, 0);
+        let table = json!({"places": [{"id": "table", "kind": "table", "holds": {"red_block": 2}}], "arm_holds": null});
+        let problems = vec!["line 2: no place called \"tray-9\"".to_string()];
+        let (r, _) = p.write_program(
+            "put everything in tray 1",
+            &table,
+            Some(("old program", &problems)),
+        );
+        let w = r.unwrap();
+        assert!(w.understood);
+        assert_eq!(w.source, program);
+        assert_eq!(w.explanation, "Everything goes to tray 1.");
+        let seen = h.join().unwrap();
+        let body = &seen[0].1;
+        assert!(
+            body["system"]
+                .as_str()
+                .unwrap()
+                .contains("# Revolve Script"),
+            "the language guide is sent"
+        );
+        assert_eq!(
+            body["output_config"]["format"]["schema"]["required"],
+            json!(["understood", "program", "explanation", "not_possible"])
+        );
+        let user: Value =
+            serde_json::from_str(body["messages"][0]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(user["request"], "put everything in tray 1");
+        assert_eq!(user["table"], table);
+        assert_eq!(user["previous_program"], "old program");
+        assert_eq!(user["problems"], json!(problems));
+    }
+
+    #[test]
     fn http_agent_request_uses_native_strict_tools() {
         let (url, h) = fake_server(vec![(
             200,
