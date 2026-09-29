@@ -1,0 +1,35 @@
+{
+  "id": "dev-13-classification",
+  "family": "unknown-classification",
+  "description": "one washer short unless an unclassified item (truly scrap) is usable",
+  "seed": 112,
+  "world": {
+    "stock": {
+      "red_block": 2,
+      "blue_block": 2,
+      "washer": 3,
+      "green_block": 0
+    },
+    "unknown_items": [
+      {
+        "bin": "bin-washer",
+        "true_kind": "scrap"
+      }
+    ],
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [],
+  "human": {},
+  "expect": {
+    "outcome": "partial",
+    "kits_complete": 1
+  }
+}

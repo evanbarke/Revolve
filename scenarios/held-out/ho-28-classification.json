@@ -1,0 +1,35 @@
+{
+  "id": "ho-28-classification",
+  "family": "unknown-classification",
+  "description": "one washer short unless an unclassified item (truly a washer) is usable",
+  "seed": 5027,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 6,
+      "washer": 5,
+      "green_block": 0
+    },
+    "unknown_items": [
+      {
+        "bin": "bin-washer",
+        "true_kind": "washer"
+      }
+    ],
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 2,
+      "washer": 2
+    }
+  },
+  "faults": [],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 3
+  }
+}

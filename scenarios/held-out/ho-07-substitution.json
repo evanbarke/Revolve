@@ -1,0 +1,33 @@
+{
+  "id": "ho-07-substitution",
+  "family": "substitution",
+  "description": "blue short by 1; green available; human approves substitution",
+  "seed": 5006,
+  "world": {
+    "stock": {
+      "red_block": 4,
+      "blue_block": 2,
+      "washer": 7,
+      "green_block": 2
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [],
+  "human": {
+    "answers": {
+      "substitution": "approve"
+    }
+  },
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 3
+  }
+}

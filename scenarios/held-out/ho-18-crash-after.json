@@ -1,0 +1,37 @@
+{
+  "id": "ho-18-crash-after",
+  "family": "crash-after-effect",
+  "description": "executor process dies after workspace.pick #2 commits, before recording it",
+  "seed": 5017,
+  "world": {
+    "stock": {
+      "red_block": 7,
+      "blue_block": 4,
+      "washer": 4,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 2,
+      "blue_block": 1,
+      "washer": 1
+    }
+  },
+  "faults": [
+    {
+      "kind": "crash_after_effect",
+      "on": {
+        "capability": "workspace.pick",
+        "nth": 2
+      }
+    }
+  ],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 3
+  }
+}

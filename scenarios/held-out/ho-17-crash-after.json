@@ -1,0 +1,37 @@
+{
+  "id": "ho-17-crash-after",
+  "family": "crash-after-effect",
+  "description": "executor process dies after workspace.place #5 commits, before recording it",
+  "seed": 5016,
+  "world": {
+    "stock": {
+      "red_block": 4,
+      "blue_block": 4,
+      "washer": 10,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 3
+    }
+  },
+  "faults": [
+    {
+      "kind": "crash_after_effect",
+      "on": {
+        "capability": "workspace.place",
+        "nth": 5
+      }
+    }
+  ],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 3
+  }
+}

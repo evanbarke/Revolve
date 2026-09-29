@@ -1,0 +1,36 @@
+{
+  "id": "unknown-classification",
+  "family": "unknown-classification",
+  "description": "one washer short unless an unclassified item (truly a washer) is usable",
+  "seed": 1,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 3,
+      "washer": 5,
+      "green_block": 0
+    },
+    "unknown_items": [
+      {
+        "bin": "bin-washer",
+        "true_kind": "washer"
+      }
+    ],
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    },
+    "source_text": "Prepare three kits. Each kit needs one red block, one blue block, and two washers. Update inventory as you use parts. Tell me what is missing and ask before making substitutions."
+  },
+  "faults": [],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 3
+  }
+}

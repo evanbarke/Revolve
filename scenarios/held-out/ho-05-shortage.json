@@ -1,0 +1,30 @@
+{
+  "id": "ho-05-shortage",
+  "family": "shortage",
+  "description": "3 kits requested; red_block only suffices for 2",
+  "seed": 5004,
+  "world": {
+    "stock": {
+      "red_block": 2,
+      "blue_block": 7,
+      "washer": 7,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 2,
+      "washer": 2
+    }
+  },
+  "faults": [],
+  "human": {},
+  "expect": {
+    "outcome": "partial",
+    "kits_complete": 2,
+    "note": "missing 1 red_block"
+  }
+}

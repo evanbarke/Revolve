@@ -1,0 +1,25 @@
+[package]
+name = "revolve"
+version = "0.1.0"
+edition = "2024"
+# MSRV: tested on 1.94.1 (Windows x86_64 dev host) and 1.95.0 (Jetson aarch64).
+# The floor feature is std::fs::File::try_lock (stable since 1.89).
+rust-version = "1.94"
+description = "Revolve: an explicit-intent execution runtime prototype (Action IR, compiler, recoverable executor, simulator)."
+license = "UNLICENSED"
+publish = false
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive", "env"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+tiny_http = "0.12.0"
+ureq = "3.4.2"
+
+[profile.release]
+# Smaller, faster binary for the Jetson; no debug info in release artifacts.
+codegen-units = 4
+lto = "thin"
+strip = "debuginfo"

@@ -1,0 +1,9 @@
+/target
+/state
+# Local planner configuration may name a key variable; never commit secrets.
+/config/planner.json
+*.db
+*.db-wal
+*.db-shm
+.env
+*.key

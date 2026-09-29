@@ -1,0 +1,37 @@
+{
+  "id": "ho-21-timeout",
+  "family": "unknown-outcome",
+  "description": "pick #17 times out; the effect did not happen",
+  "seed": 5020,
+  "world": {
+    "stock": {
+      "red_block": 5,
+      "blue_block": 5,
+      "washer": 13,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 4,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 3
+    }
+  },
+  "faults": [
+    {
+      "kind": "timeout_before_effect",
+      "on": {
+        "capability": "workspace.pick",
+        "nth": 17
+      }
+    }
+  ],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 4
+  }
+}

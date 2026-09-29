@@ -1,0 +1,39 @@
+{
+  "id": "dev-14-cancel",
+  "family": "cancel",
+  "description": "human cancels while place #1 is in flight",
+  "seed": 113,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 3,
+      "washer": 5,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [],
+  "human": {
+    "actions": [
+      {
+        "do": "cancel",
+        "on": {
+          "capability": "workspace.place",
+          "nth": 1
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "stopped",
+    "kits_complete": 0
+  }
+}

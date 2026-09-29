@@ -1,0 +1,41 @@
+{
+  "id": "unknown-outcome-restored",
+  "family": "unknown-outcome",
+  "description": "pick #9 times out and both status and observation are withheld; a human restores evidence",
+  "seed": 1,
+  "world": {
+    "stock": {
+      "red_block": 4,
+      "blue_block": 4,
+      "washer": 7,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    },
+    "source_text": "Prepare three kits. Each kit needs one red block, one blue block, and two washers. Update inventory as you use parts. Tell me what is missing and ask before making substitutions."
+  },
+  "faults": [
+    {
+      "kind": "timeout_after_effect",
+      "on": {
+        "capability": "workspace.pick",
+        "nth": 9
+      },
+      "blackout": true
+    }
+  ],
+  "human": {
+    "restore_evidence_when_blocked": true
+  },
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 3
+  }
+}

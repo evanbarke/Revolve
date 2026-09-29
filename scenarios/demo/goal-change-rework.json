@@ -1,0 +1,52 @@
+{
+  "id": "goal-change-rework",
+  "family": "goal-change",
+  "description": "after kit 1 is complete, the composition drops one washer; rework approved",
+  "seed": 1,
+  "world": {
+    "stock": {
+      "red_block": 4,
+      "blue_block": 4,
+      "washer": 7,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    },
+    "source_text": "Prepare three kits. Each kit needs one red block, one blue block, and two washers. Update inventory as you use parts. Tell me what is missing and ask before making substitutions."
+  },
+  "faults": [],
+  "human": {
+    "answers": {
+      "rework": "approve"
+    },
+    "actions": [
+      {
+        "do": "correct",
+        "on": {
+          "capability": "workspace.place",
+          "nth": 5
+        },
+        "goal": {
+          "kit_quantity": 3,
+          "kit_components": {
+            "red_block": 1,
+            "blue_block": 1,
+            "washer": 1
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 3,
+    "note": "declined rework leaves kit 1 non-conforming (excess washer) and the partial kit 2 with its extra part"
+  }
+}

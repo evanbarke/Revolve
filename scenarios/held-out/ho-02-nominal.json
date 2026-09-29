@@ -1,0 +1,29 @@
+{
+  "id": "ho-02-nominal",
+  "family": "nominal",
+  "description": "3 kit(s), enough stock",
+  "seed": 5001,
+  "world": {
+    "stock": {
+      "red_block": 5,
+      "blue_block": 5,
+      "washer": 5,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 1
+    }
+  },
+  "faults": [],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 3
+  }
+}

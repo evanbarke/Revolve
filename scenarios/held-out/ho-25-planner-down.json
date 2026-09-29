@@ -1,0 +1,47 @@
+{
+  "id": "ho-25-planner-down",
+  "family": "planner-unavailable",
+  "description": "planner connection lost after execution starts; later a tray becomes unavailable so a new plan is needed",
+  "seed": 5024,
+  "world": {
+    "stock": {
+      "red_block": 5,
+      "blue_block": 5,
+      "washer": 5,
+      "green_block": 0
+    },
+    "trays": 5
+  },
+  "goal": {
+    "kit_quantity": 4,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 1
+    }
+  },
+  "faults": [
+    {
+      "kind": "planner_unavailable",
+      "on": {
+        "capability": "workspace.place",
+        "nth": 1
+      }
+    },
+    {
+      "kind": "destination_unavailable",
+      "on": {
+        "capability": "workspace.place",
+        "nth": 3
+      },
+      "location_id": "tray-2"
+    }
+  ],
+  "human": {
+    "restore_planner_when_waiting": true
+  },
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 4
+  }
+}

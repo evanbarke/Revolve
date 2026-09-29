@@ -1,0 +1,38 @@
+{
+  "id": "ho-11-disturbance",
+  "family": "record-mismatch",
+  "description": "an operator removes a stocked red block after planning; the record and the plan are now wrong",
+  "seed": 5010,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 3,
+      "washer": 6,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [
+    {
+      "kind": "remove_object",
+      "on": {
+        "capability": "workspace.place",
+        "nth": 1
+      },
+      "object_id": "red-03"
+    }
+  ],
+  "human": {},
+  "expect": {
+    "outcome": "partial",
+    "kits_complete": 2
+  }
+}

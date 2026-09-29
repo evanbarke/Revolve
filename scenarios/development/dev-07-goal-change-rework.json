@@ -1,0 +1,51 @@
+{
+  "id": "dev-07-goal-change-rework",
+  "family": "goal-change",
+  "description": "after kit 1 is complete, the composition drops one washer; rework declined",
+  "seed": 106,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 3,
+      "washer": 5,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [],
+  "human": {
+    "answers": {
+      "rework": "decline"
+    },
+    "actions": [
+      {
+        "do": "correct",
+        "on": {
+          "capability": "workspace.place",
+          "nth": 5
+        },
+        "goal": {
+          "kit_quantity": 2,
+          "kit_components": {
+            "red_block": 1,
+            "blue_block": 1,
+            "washer": 1
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "partial",
+    "kits_complete": 1,
+    "note": "declined rework leaves kit 1 non-conforming (excess washer) and the partial kit 2 with its extra part"
+  }
+}

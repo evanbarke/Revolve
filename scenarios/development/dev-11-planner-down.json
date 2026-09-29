@@ -1,0 +1,39 @@
+{
+  "id": "dev-11-planner-down",
+  "family": "planner-unavailable",
+  "description": "planner connection lost after execution starts",
+  "seed": 110,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 3,
+      "washer": 5,
+      "green_block": 0
+    },
+    "trays": 3
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [
+    {
+      "kind": "planner_unavailable",
+      "on": {
+        "capability": "workspace.place",
+        "nth": 1
+      }
+    }
+  ],
+  "human": {
+    "restore_planner_when_waiting": true
+  },
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 2
+  }
+}

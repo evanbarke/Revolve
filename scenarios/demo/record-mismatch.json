@@ -1,0 +1,36 @@
+{
+  "id": "record-mismatch",
+  "family": "record-mismatch",
+  "description": "inventory record overstates red blocks; observation must win, with an evidence-bound adjustment",
+  "seed": 1,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 3,
+      "washer": 6,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    },
+    "source_text": "Prepare three kits. Each kit needs one red block, one blue block, and two washers. Update inventory as you use parts. Tell me what is missing and ask before making substitutions."
+  },
+  "faults": [],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 3
+  },
+  "inventory_record": {
+    "red_block": 4,
+    "blue_block": 3,
+    "washer": 6,
+    "green_block": 0
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "dev-05-destination",
+  "family": "destination-unavailable",
+  "description": "tray-2 becomes unavailable after planning, before any part reaches it",
+  "seed": 104,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 3,
+      "washer": 5,
+      "green_block": 0
+    },
+    "trays": 3
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [
+    {
+      "kind": "destination_unavailable",
+      "on": {
+        "capability": "workspace.place",
+        "nth": 4
+      },
+      "location_id": "tray-2"
+    }
+  ],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 2
+  }
+}

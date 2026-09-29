@@ -1,0 +1,30 @@
+{
+  "id": "dev-02-shortage",
+  "family": "shortage",
+  "description": "2 kits requested; washer only suffices for 1",
+  "seed": 101,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 3,
+      "washer": 2,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [],
+  "human": {},
+  "expect": {
+    "outcome": "partial",
+    "kits_complete": 1,
+    "note": "missing 2 washer"
+  }
+}

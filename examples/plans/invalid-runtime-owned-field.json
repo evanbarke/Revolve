@@ -1,0 +1,1102 @@
+{
+  "schema_version": "revolve.action-ir/v1",
+  "plan_id": "handwritten-nominal-3-kits",
+  "goal_id": "goal-nominal",
+  "goal_revision": 1,
+  "basis": {
+    "world_revision": 0,
+    "max_observation_age_ms": 5000
+  },
+  "capabilities": {
+    "inventory.reserve": "1",
+    "workspace.pick": "1",
+    "workspace.place": "1",
+    "inventory.consume": "1",
+    "inventory.release": "1"
+  },
+  "requested_permissions": [
+    "inventory.consume",
+    "inventory.release",
+    "inventory.reserve",
+    "workspace.pick",
+    "workspace.place"
+  ],
+  "budgets": {
+    "max_actions": 60,
+    "max_planner_rounds": 1,
+    "max_elapsed_ms": 60000
+  },
+  "kit_assignments": [
+    {
+      "kit": 1,
+      "tray_id": "tray-1"
+    },
+    {
+      "kit": 2,
+      "tray_id": "tray-2"
+    },
+    {
+      "kit": 3,
+      "tray_id": "tray-3"
+    }
+  ],
+  "explanation": "Reserve 3 red, 3 blue, 6 washers; fill tray-1..3 one part at a time, recording consumption after each verified placement; release anything unused.",
+  "expected_outcome": {
+    "kits_complete": [
+      "tray-1",
+      "tray-2",
+      "tray-3"
+    ],
+    "kits_incomplete": []
+  },
+  "steps": [
+    {
+      "step_id": "reserve-stock",
+      "capability": "inventory.reserve",
+      "capability_version": "1",
+      "arguments": {
+        "counts": {
+          "red_block": 3,
+          "blue_block": 3,
+          "washer": 6
+        }
+      }
+    },
+    {
+      "step_id": "pick-red-01",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "red-01",
+        "source_id": "bin-red"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "red-01",
+          "location_id": "bin-red"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "red-01"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "reserve-stock"
+      ]
+    },
+    {
+      "step_id": "place-red-01-in-tray-1",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-red-01.object_id"
+        },
+        "destination_id": "tray-1"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "red-01"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-1"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "red-01",
+          "location_id": "tray-1"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-red-01"
+      ]
+    },
+    {
+      "step_id": "consume-red-01",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-red-01-in-tray-1",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "red_block",
+        "quantity": 1,
+        "evidence_object_id": "red-01"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "red-01",
+          "location_id": "tray-1"
+        }
+      ]
+    },
+    {
+      "step_id": "pick-blue-01",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "blue-01",
+        "source_id": "bin-blue"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "blue-01",
+          "location_id": "bin-blue"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "blue-01"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "consume-red-01"
+      ]
+    },
+    {
+      "step_id": "place-blue-01-in-tray-1",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-blue-01.object_id"
+        },
+        "destination_id": "tray-1"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "blue-01"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-1"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "blue-01",
+          "location_id": "tray-1"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-blue-01"
+      ]
+    },
+    {
+      "step_id": "consume-blue-01",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-blue-01-in-tray-1",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "blue_block",
+        "quantity": 1,
+        "evidence_object_id": "blue-01"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "blue-01",
+          "location_id": "tray-1"
+        }
+      ]
+    },
+    {
+      "step_id": "pick-washer-01",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "washer-01",
+        "source_id": "bin-washer"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "washer-01",
+          "location_id": "bin-washer"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-01"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "consume-blue-01"
+      ]
+    },
+    {
+      "step_id": "place-washer-01-in-tray-1",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-washer-01.object_id"
+        },
+        "destination_id": "tray-1"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-01"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-1"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-01",
+          "location_id": "tray-1"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-washer-01"
+      ]
+    },
+    {
+      "step_id": "consume-washer-01",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-washer-01-in-tray-1",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "washer",
+        "quantity": 1,
+        "evidence_object_id": "washer-01"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-01",
+          "location_id": "tray-1"
+        }
+      ]
+    },
+    {
+      "step_id": "pick-washer-02",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "washer-02",
+        "source_id": "bin-washer"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "washer-02",
+          "location_id": "bin-washer"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-02"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "consume-washer-01"
+      ]
+    },
+    {
+      "step_id": "place-washer-02-in-tray-1",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-washer-02.object_id"
+        },
+        "destination_id": "tray-1"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-02"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-1"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-02",
+          "location_id": "tray-1"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-washer-02"
+      ]
+    },
+    {
+      "step_id": "consume-washer-02",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-washer-02-in-tray-1",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "washer",
+        "quantity": 1,
+        "evidence_object_id": "washer-02"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-02",
+          "location_id": "tray-1"
+        }
+      ]
+    },
+    {
+      "step_id": "pick-red-02",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "red-02",
+        "source_id": "bin-red"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "red-02",
+          "location_id": "bin-red"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "red-02"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "consume-washer-02"
+      ]
+    },
+    {
+      "step_id": "place-red-02-in-tray-2",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-red-02.object_id"
+        },
+        "destination_id": "tray-2"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "red-02"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-2"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "red-02",
+          "location_id": "tray-2"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-red-02"
+      ]
+    },
+    {
+      "step_id": "consume-red-02",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-red-02-in-tray-2",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "red_block",
+        "quantity": 1,
+        "evidence_object_id": "red-02"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "red-02",
+          "location_id": "tray-2"
+        }
+      ]
+    },
+    {
+      "step_id": "pick-blue-02",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "blue-02",
+        "source_id": "bin-blue"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "blue-02",
+          "location_id": "bin-blue"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "blue-02"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "consume-red-02"
+      ]
+    },
+    {
+      "step_id": "place-blue-02-in-tray-2",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-blue-02.object_id"
+        },
+        "destination_id": "tray-2"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "blue-02"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-2"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "blue-02",
+          "location_id": "tray-2"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-blue-02"
+      ]
+    },
+    {
+      "step_id": "consume-blue-02",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-blue-02-in-tray-2",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "blue_block",
+        "quantity": 1,
+        "evidence_object_id": "blue-02"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "blue-02",
+          "location_id": "tray-2"
+        }
+      ]
+    },
+    {
+      "step_id": "pick-washer-03",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "washer-03",
+        "source_id": "bin-washer"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "washer-03",
+          "location_id": "bin-washer"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-03"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "consume-blue-02"
+      ]
+    },
+    {
+      "step_id": "place-washer-03-in-tray-2",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-washer-03.object_id"
+        },
+        "destination_id": "tray-2"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-03"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-2"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-03",
+          "location_id": "tray-2"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-washer-03"
+      ]
+    },
+    {
+      "step_id": "consume-washer-03",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-washer-03-in-tray-2",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "washer",
+        "quantity": 1,
+        "evidence_object_id": "washer-03"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-03",
+          "location_id": "tray-2"
+        }
+      ]
+    },
+    {
+      "step_id": "pick-washer-04",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "washer-04",
+        "source_id": "bin-washer"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "washer-04",
+          "location_id": "bin-washer"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-04"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "consume-washer-03"
+      ]
+    },
+    {
+      "step_id": "place-washer-04-in-tray-2",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-washer-04.object_id"
+        },
+        "destination_id": "tray-2"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-04"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-2"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-04",
+          "location_id": "tray-2"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-washer-04"
+      ]
+    },
+    {
+      "step_id": "consume-washer-04",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-washer-04-in-tray-2",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "washer",
+        "quantity": 1,
+        "evidence_object_id": "washer-04"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-04",
+          "location_id": "tray-2"
+        }
+      ]
+    },
+    {
+      "step_id": "pick-red-03",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "red-03",
+        "source_id": "bin-red"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "red-03",
+          "location_id": "bin-red"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "red-03"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "consume-washer-04"
+      ]
+    },
+    {
+      "step_id": "place-red-03-in-tray-3",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-red-03.object_id"
+        },
+        "destination_id": "tray-3"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "red-03"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-3"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "red-03",
+          "location_id": "tray-3"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-red-03"
+      ]
+    },
+    {
+      "step_id": "consume-red-03",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-red-03-in-tray-3",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "red_block",
+        "quantity": 1,
+        "evidence_object_id": "red-03"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "red-03",
+          "location_id": "tray-3"
+        }
+      ]
+    },
+    {
+      "step_id": "pick-blue-03",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "blue-03",
+        "source_id": "bin-blue"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "blue-03",
+          "location_id": "bin-blue"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "blue-03"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "consume-red-03"
+      ]
+    },
+    {
+      "step_id": "place-blue-03-in-tray-3",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-blue-03.object_id"
+        },
+        "destination_id": "tray-3"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "blue-03"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-3"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "blue-03",
+          "location_id": "tray-3"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-blue-03"
+      ]
+    },
+    {
+      "step_id": "consume-blue-03",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-blue-03-in-tray-3",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "blue_block",
+        "quantity": 1,
+        "evidence_object_id": "blue-03"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "blue-03",
+          "location_id": "tray-3"
+        }
+      ]
+    },
+    {
+      "step_id": "pick-washer-05",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "washer-05",
+        "source_id": "bin-washer"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "washer-05",
+          "location_id": "bin-washer"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-05"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "consume-blue-03"
+      ]
+    },
+    {
+      "step_id": "place-washer-05-in-tray-3",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-washer-05.object_id"
+        },
+        "destination_id": "tray-3"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-05"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-3"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-05",
+          "location_id": "tray-3"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-washer-05"
+      ]
+    },
+    {
+      "step_id": "consume-washer-05",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-washer-05-in-tray-3",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "washer",
+        "quantity": 1,
+        "evidence_object_id": "washer-05"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-05",
+          "location_id": "tray-3"
+        }
+      ]
+    },
+    {
+      "step_id": "pick-washer-06",
+      "capability": "workspace.pick",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": "washer-06",
+        "source_id": "bin-washer"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_empty"
+        },
+        {
+          "kind": "object_at",
+          "object_id": "washer-06",
+          "location_id": "bin-washer"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-06"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "consume-washer-05"
+      ]
+    },
+    {
+      "step_id": "place-washer-06-in-tray-3",
+      "capability": "workspace.place",
+      "capability_version": "1",
+      "arguments": {
+        "object_id": {
+          "$ref": "pick-washer-06.object_id"
+        },
+        "destination_id": "tray-3"
+      },
+      "preconditions": [
+        {
+          "kind": "gripper_holds",
+          "object_id": "washer-06"
+        },
+        {
+          "kind": "destination_available",
+          "destination_id": "tray-3"
+        }
+      ],
+      "postconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-06",
+          "location_id": "tray-3"
+        }
+      ],
+      "on_unknown_outcome": "reconcile_before_retry",
+      "depends_on": [
+        "pick-washer-06"
+      ]
+    },
+    {
+      "step_id": "consume-washer-06",
+      "capability": "inventory.consume",
+      "capability_version": "1",
+      "depends_on": [
+        "place-washer-06-in-tray-3",
+        "reserve-stock"
+      ],
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        },
+        "part_kind": "washer",
+        "quantity": 1,
+        "evidence_object_id": "washer-06"
+      },
+      "preconditions": [
+        {
+          "kind": "object_at",
+          "object_id": "washer-06",
+          "location_id": "tray-3"
+        }
+      ]
+    },
+    {
+      "step_id": "release-unused",
+      "capability": "inventory.release",
+      "capability_version": "1",
+      "arguments": {
+        "reservation_id": {
+          "$ref": "reserve-stock.reservation_id"
+        }
+      },
+      "depends_on": [
+        "consume-washer-06"
+      ]
+    }
+  ],
+  "granted_permissions": [
+    "workspace.place"
+  ]
+}

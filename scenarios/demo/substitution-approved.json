@@ -1,0 +1,34 @@
+{
+  "id": "substitution-approved",
+  "family": "substitution",
+  "description": "blue short by 1; green available; human approves substitution",
+  "seed": 1,
+  "world": {
+    "stock": {
+      "red_block": 4,
+      "blue_block": 2,
+      "washer": 7,
+      "green_block": 2
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    },
+    "source_text": "Prepare three kits. Each kit needs one red block, one blue block, and two washers. Update inventory as you use parts. Tell me what is missing and ask before making substitutions."
+  },
+  "faults": [],
+  "human": {
+    "answers": {
+      "substitution": "approve"
+    }
+  },
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 3
+  }
+}

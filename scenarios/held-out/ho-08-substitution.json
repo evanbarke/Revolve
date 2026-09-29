@@ -1,0 +1,33 @@
+{
+  "id": "ho-08-substitution",
+  "family": "substitution",
+  "description": "blue short by 1; green available; human declines substitution",
+  "seed": 5007,
+  "world": {
+    "stock": {
+      "red_block": 4,
+      "blue_block": 2,
+      "washer": 4,
+      "green_block": 2
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 1
+    }
+  },
+  "faults": [],
+  "human": {
+    "answers": {
+      "substitution": "decline"
+    }
+  },
+  "expect": {
+    "outcome": "partial",
+    "kits_complete": 2
+  }
+}

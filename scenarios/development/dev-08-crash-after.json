@@ -1,0 +1,37 @@
+{
+  "id": "dev-08-crash-after",
+  "family": "crash-after-effect",
+  "description": "executor process dies after workspace.place #2 commits, before recording it",
+  "seed": 107,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 3,
+      "washer": 5,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [
+    {
+      "kind": "crash_after_effect",
+      "on": {
+        "capability": "workspace.place",
+        "nth": 2
+      }
+    }
+  ],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 2
+  }
+}

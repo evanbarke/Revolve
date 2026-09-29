@@ -1,0 +1,40 @@
+{
+  "id": "cancel",
+  "family": "cancel",
+  "description": "human cancels while place #6 is in flight",
+  "seed": 1,
+  "world": {
+    "stock": {
+      "red_block": 4,
+      "blue_block": 4,
+      "washer": 7,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    },
+    "source_text": "Prepare three kits. Each kit needs one red block, one blue block, and two washers. Update inventory as you use parts. Tell me what is missing and ask before making substitutions."
+  },
+  "faults": [],
+  "human": {
+    "actions": [
+      {
+        "do": "cancel",
+        "on": {
+          "capability": "workspace.place",
+          "nth": 6
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "stopped",
+    "kits_complete": 1
+  }
+}

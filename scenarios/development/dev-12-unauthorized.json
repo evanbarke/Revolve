@@ -1,0 +1,37 @@
+{
+  "id": "dev-12-unauthorized",
+  "family": "unauthorized-proposal",
+  "description": "a planner decision requests a placement outside the granted locations",
+  "seed": 111,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 3,
+      "washer": 5,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [
+    {
+      "kind": "inject_unauthorized_action",
+      "on": {
+        "capability": "workspace.place",
+        "nth": 2
+      }
+    }
+  ],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 2
+  }
+}

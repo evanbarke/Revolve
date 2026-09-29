@@ -1,0 +1,37 @@
+{
+  "id": "ho-19-crash-before",
+  "family": "crash-after-effect",
+  "description": "executor process dies after recording dispatch of pick #4, before the effect",
+  "seed": 5018,
+  "world": {
+    "stock": {
+      "red_block": 5,
+      "blue_block": 3,
+      "washer": 3,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 2,
+      "blue_block": 1,
+      "washer": 1
+    }
+  },
+  "faults": [
+    {
+      "kind": "crash_before_effect",
+      "on": {
+        "capability": "workspace.pick",
+        "nth": 4
+      }
+    }
+  ],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 2
+  }
+}

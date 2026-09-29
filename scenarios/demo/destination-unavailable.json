@@ -1,0 +1,39 @@
+{
+  "id": "destination-unavailable",
+  "family": "destination-unavailable",
+  "description": "tray-2 becomes unavailable after planning, before any part reaches it",
+  "seed": 1,
+  "world": {
+    "stock": {
+      "red_block": 4,
+      "blue_block": 4,
+      "washer": 7,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 3,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    },
+    "source_text": "Prepare three kits. Each kit needs one red block, one blue block, and two washers. Update inventory as you use parts. Tell me what is missing and ask before making substitutions."
+  },
+  "faults": [
+    {
+      "kind": "destination_unavailable",
+      "on": {
+        "capability": "workspace.place",
+        "nth": 4
+      },
+      "location_id": "tray-2"
+    }
+  ],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 3
+  }
+}

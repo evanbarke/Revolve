@@ -1,0 +1,29 @@
+{
+  "id": "dev-01-nominal",
+  "family": "nominal",
+  "description": "2 kit(s), enough stock",
+  "seed": 100,
+  "world": {
+    "stock": {
+      "red_block": 2,
+      "blue_block": 2,
+      "washer": 4,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 2
+  }
+}

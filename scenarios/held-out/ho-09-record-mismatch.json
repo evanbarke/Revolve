@@ -1,0 +1,35 @@
+{
+  "id": "ho-09-record-mismatch",
+  "family": "record-mismatch",
+  "description": "inventory record overstates red blocks; observation must win, with an evidence-bound adjustment",
+  "seed": 5008,
+  "world": {
+    "stock": {
+      "red_block": 2,
+      "blue_block": 2,
+      "washer": 6,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 3
+    }
+  },
+  "faults": [],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 2
+  },
+  "inventory_record": {
+    "red_block": 3,
+    "blue_block": 2,
+    "washer": 6,
+    "green_block": 0
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "id": "ho-24-planner-down",
+  "family": "planner-unavailable",
+  "description": "planner connection lost after execution starts",
+  "seed": 5023,
+  "world": {
+    "stock": {
+      "red_block": 5,
+      "blue_block": 9,
+      "washer": 9,
+      "green_block": 0
+    },
+    "trays": 5
+  },
+  "goal": {
+    "kit_quantity": 4,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 2,
+      "washer": 2
+    }
+  },
+  "faults": [
+    {
+      "kind": "planner_unavailable",
+      "on": {
+        "capability": "workspace.place",
+        "nth": 1
+      }
+    }
+  ],
+  "human": {
+    "restore_planner_when_waiting": true
+  },
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 4
+  }
+}

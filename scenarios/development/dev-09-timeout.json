@@ -1,0 +1,37 @@
+{
+  "id": "dev-09-timeout",
+  "family": "unknown-outcome",
+  "description": "pick #3 times out; the effect did not happen",
+  "seed": 108,
+  "world": {
+    "stock": {
+      "red_block": 3,
+      "blue_block": 3,
+      "washer": 5,
+      "green_block": 0
+    },
+    "trays": 4
+  },
+  "goal": {
+    "kit_quantity": 2,
+    "kit_components": {
+      "red_block": 1,
+      "blue_block": 1,
+      "washer": 2
+    }
+  },
+  "faults": [
+    {
+      "kind": "timeout_before_effect",
+      "on": {
+        "capability": "workspace.pick",
+        "nth": 3
+      }
+    }
+  ],
+  "human": {},
+  "expect": {
+    "outcome": "completed",
+    "kits_complete": 2
+  }
+}
