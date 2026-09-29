@@ -213,8 +213,15 @@ pub fn decide(inp: &PolicyInput) -> PolicyOutput {
         .filter(|(t, a)| *a && !assign.values().any(|v| v == t))
         .map(|(t, _)| *t)
         .collect();
-    // Prefer trays that already hold parts (continue partial kits), then empty trays.
-    free.sort_by_key(|t| (contents(t).is_empty(), tray_num(t)));
+    // Trays the person asked for first (in their order), then trays that already hold
+    // parts (continue partial kits), then empty trays.
+    let pref = |t: &str| {
+        goal.preferred_trays
+            .iter()
+            .position(|p| p == t)
+            .unwrap_or(usize::MAX)
+    };
+    free.sort_by_key(|t| (pref(t), contents(t).is_empty(), tray_num(t)));
     let mut incomplete: Vec<IncompleteKit> = vec![];
     for k in 1..=q {
         if assign.contains_key(&k) {

@@ -14,6 +14,7 @@
 use crate::harness::{self, Arm, PlannerChoice};
 use crate::inventory;
 use crate::model::{GoalSpec, parse_restricted_request};
+use crate::planner::live::{BudgetLedger, LiveConfig, LivePlanner};
 use crate::scenario::{self, FaultSpec, Scenario};
 use crate::sim::SimWorld;
 use crate::store::*;
@@ -183,6 +184,7 @@ fn handle(ctx: &Ctx, mut req: Request) {
         (Method::Get, ["api", "scenarios"]) => list_scenarios(ctx),
         (Method::Get, ["api", "runs"]) => list_runs(ctx),
         (Method::Post, ["api", "runs"]) => create(ctx, &body),
+        (Method::Post, ["api", "interpret"]) => interpret(ctx, &body),
         (Method::Get, ["api", "runs", id]) => run_view(ctx, id),
         (Method::Post, ["api", "runs", id, action]) => act(ctx, id, action, &body),
         _ => Err(Error::new("not found")),
@@ -251,14 +253,76 @@ fn create(ctx: &Ctx, body: &str) -> Result<Value> {
     } else {
         "interactive"
     };
-    if v["planner"].as_str().unwrap_or("scripted") != "scripted" {
-        crate::bail!(
-            "the UI starts scripted-planner runs; live runs require an explicit --budget on the CLI"
+    let choice = match v["planner"].as_str().unwrap_or("scripted") {
+        "scripted" => PlannerChoice::Scripted,
+        "live" => {
+            // Every live run from the UI carries its own small, explicit call cap.
+            let budget = v["budget"].as_u64().unwrap_or(5).clamp(1, 10) as u32;
+            let cfg_path = PathBuf::from(LIVE_CONFIG);
+            let cfg = LiveConfig::load(&cfg_path).map_err(|_| {
+                Error::new("the AI planner is not configured (config/planner.json)")
+            })?;
+            if !cfg.key_present() {
+                crate::bail!(
+                    "the AI planner has no API key ({} is not set)",
+                    cfg.api_key_env
+                );
+            }
+            let dir = ctx.state_dir.join("budgets");
+            std::fs::create_dir_all(&dir)?;
+            let ledger = dir.join(format!("{}.json", crate::util::fresh_id("ui")));
+            BudgetLedger::init(&ledger, budget)?;
+            PlannerChoice::Live {
+                config: cfg_path,
+                budget: ledger,
+            }
+        }
+        other => crate::bail!("unknown planner `{other}`"),
+    };
+    let (run_id, _) = harness::create_run(&ctx.state_dir, &sc, arm, &choice, human)?;
+    Ok(json!({"run_id": run_id}))
+}
+
+const LIVE_CONFIG: &str = "config/planner.json";
+
+/// Turn a person's words into a structured request for them to confirm. Tries the
+/// free offline parser first; otherwise one small AI call (with a 1-call cap).
+fn interpret(ctx: &Ctx, body: &str) -> Result<Value> {
+    let v: Value = serde_json::from_str(body)?;
+    let text = v["text"].as_str().unwrap_or("").trim().to_string();
+    if text.is_empty() || text.len() > 500 {
+        crate::bail!("say what you want in a sentence (up to 500 characters)");
+    }
+    if let Ok(g) = parse_restricted_request(&text) {
+        return Ok(
+            json!({"understood": true, "goal": g, "summary": "", "not_supported": "", "by": "offline parser (free)"}),
         );
     }
-    let (run_id, _) =
-        harness::create_run(&ctx.state_dir, &sc, arm, &PlannerChoice::Scripted, human)?;
-    Ok(json!({"run_id": run_id}))
+    let cfg = LiveConfig::load(Path::new(LIVE_CONFIG))
+        .map_err(|_| Error::new("Offline, only requests like \"Prepare 2 kits. Each kit needs one red block and two washers.\" are understood. To use your own words, configure the AI planner (config/planner.json and an API key)."))?;
+    if !cfg.key_present() {
+        crate::bail!(
+            "To use your own words the AI needs an API key ({} is not set).",
+            cfg.api_key_env
+        );
+    }
+    let pricing = cfg.pricing.clone();
+    let model = cfg.model.clone();
+    let dir = ctx.state_dir.join("budgets");
+    std::fs::create_dir_all(&dir)?;
+    let ledger = dir.join(format!("{}.json", crate::util::fresh_id("interpret")));
+    BudgetLedger::init(&ledger, 1)?;
+    let mut planner = LivePlanner::new(cfg, &ledger).map_err(|e| Error::new(e.to_string()))?;
+    let (r, info) = planner.interpret(&text);
+    let i = r.map_err(|e| Error::new(format!("The AI could not interpret that ({e}).")))?;
+    let cost = match (&pricing, info.usage) {
+        (Some(p), Some((ti, to))) => json!(crate::planner::live::estimate_cost_usd(p, ti, to)),
+        _ => Value::Null,
+    };
+    Ok(json!({
+        "understood": i.understood, "goal": i.goal, "summary": i.summary, "not_supported": i.not_supported,
+        "by": format!("AI ({model})"), "usage": info.usage.map(|(a, b)| json!({"input_tokens": a, "output_tokens": b})), "cost_usd_estimate": cost,
+    }))
 }
 
 fn spawn_executor(ctx: &Ctx, run_id: &str) -> Result<()> {

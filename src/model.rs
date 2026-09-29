@@ -151,6 +151,10 @@ pub struct GoalSpec {
     /// Original request text, kept for display and audit. Not interpreted by the runtime.
     #[serde(default)]
     pub source_text: Option<String>,
+    /// Trays the person asked for, in order (kit 1 goes to the first). A preference:
+    /// an unavailable tray is not used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preferred_trays: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -194,6 +198,15 @@ impl GoalSpec {
         if !self.ask_before_substitution {
             bail!("ask_before_substitution cannot be disabled in v0");
         }
+        for (i, t) in self.preferred_trays.iter().enumerate() {
+            let n: Option<u32> = t.strip_prefix("tray-").and_then(|n| n.parse().ok());
+            if !matches!(n, Some(1..=8)) {
+                bail!("preferred_trays: `{t}` is not a tray (tray-1 .. tray-8)");
+            }
+            if self.preferred_trays[..i].contains(t) {
+                bail!("preferred_trays: `{t}` listed twice");
+            }
+        }
         Ok(())
     }
 
@@ -223,7 +236,16 @@ impl GoalSpec {
             .iter()
             .map(|(k, n)| format!("{n}x {k}"))
             .collect();
-        format!("{} kit(s) of [{}]", self.kit_quantity, parts.join(", "))
+        let trays = if self.preferred_trays.is_empty() {
+            String::new()
+        } else {
+            format!(" in {}", self.preferred_trays.join(", "))
+        };
+        format!(
+            "{} kit(s) of [{}]{trays}",
+            self.kit_quantity,
+            parts.join(", ")
+        )
     }
 }
 
@@ -353,6 +375,7 @@ pub fn parse_restricted_request(text: &str) -> Result<GoalSpec> {
         ask_before_substitution: true,
         rework_permitted: None,
         source_text: Some(text.to_string()),
+        preferred_trays: vec![],
     };
     g.validate()?;
     Ok(g)

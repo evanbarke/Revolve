@@ -603,6 +603,7 @@ function renderTech(v) {
 // ------------------------------------------------------------------ main render / poll
 
 function renderEmpty() {
+  $("run-panels").hidden = true;
   setBadge("idle", "Nothing running");
   $("now-title").textContent = "Choose what should happen above and press Start.";
   $("now-detail").textContent = "Or pick one of your previous runs at the top of the page.";
@@ -614,6 +615,7 @@ function renderEmpty() {
 
 function render(v) {
   view = v;
+  $("run-panels").hidden = false;
   const trayKit = trayKitMap(v);
   renderNow(v, trayKit);
   renderGoal(v);
@@ -649,6 +651,21 @@ async function loadRuns(select) {
   sel.value = current || "";
 }
 
+async function startRun(goal) {
+  try {
+    const r = await api("POST", "/api/runs", {
+      scenario: $("scenario-select").value, arm: $("arm-select").value, planner: $("planner-select").value, budget: 5,
+      scripted_human: $("scripted-human").checked, goal,
+    });
+    $("interpretation").hidden = true;
+    await loadRuns(r.run_id);
+    history.replaceState(null, "", "#run=" + encodeURIComponent(r.run_id));
+    await act("start", {}, true);
+    toast("Started.");
+    $("now-card").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (err) { toast("Could not start: " + err.message); }
+}
+
 function wire() {
   $("run-select").addEventListener("change", (e) => {
     current = e.target.value || null;
@@ -661,18 +678,35 @@ function wire() {
   $("show-all-scenarios").addEventListener("change", fillScenarioSelect);
   $("new-run").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const text = $("new-request").value.trim();
+    if (!text) return startRun(null);
+    // Your own words: show what was understood first; nothing runs until you confirm.
+    const box = $("interpretation");
+    box.hidden = false;
+    $("interp-title").textContent = "Reading your request…";
+    $("interp-detail").textContent = "";
+    clear($("interp-actions"));
     try {
-      const r = await api("POST", "/api/runs", {
-        scenario: $("scenario-select").value, arm: $("arm-select").value,
-        scripted_human: $("scripted-human").checked, request: $("new-request").value,
-      });
-      await loadRuns(r.run_id);
-      history.replaceState(null, "", "#run=" + encodeURIComponent(r.run_id));
-      await act("start", {}, true);
-      toast("Started.");
-      $("now-card").scrollIntoView({ behavior: "smooth", block: "start" });
-    } catch (err) { toast("Could not start: " + err.message); }
+      const r = await api("POST", "/api/interpret", { text });
+      const cost = r.cost_usd_estimate != null ? " · cost about $" + Number(r.cost_usd_estimate).toFixed(3) : "";
+      if (r.understood && r.goal) {
+        const trays = (r.goal.preferred_trays || []).map((t) => "tray " + trayNum(t));
+        $("interp-title").textContent = "I understood: " + goalSentence(r.goal) + (trays.length ? ", in " + listJoin(trays) : "") + ".";
+        $("interp-detail").textContent = (r.not_supported ? "Not possible here: " + r.not_supported + " " : "") + "(read by " + r.by + cost + ")";
+        $("interp-actions").append(
+          actionButton("Yes, start", () => startRun(r.goal), "big"),
+          actionButton("Change my words", () => { box.hidden = true; $("new-request").focus(); }, "ghost"));
+      } else {
+        $("interp-title").textContent = "I couldn't turn that into a job for this workspace.";
+        $("interp-detail").textContent = (r.not_supported || "It only knows red, blue and green blocks, washers and trays.") + " (read by " + r.by + cost + ")";
+        $("interp-actions").append(actionButton("Change my words", () => { box.hidden = true; $("new-request").focus(); }, "ghost"));
+      }
+    } catch (err) {
+      $("interp-title").textContent = "I couldn't read that.";
+      $("interp-detail").textContent = err.message;
+    }
   });
+  $("new-request").addEventListener("input", () => { $("interpretation").hidden = true; });
   $("correct-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const comps = {};

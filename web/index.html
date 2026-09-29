@@ -24,14 +24,26 @@
   <section class="card" id="start-card">
     <h2>Start a run</h2>
     <form id="new-run">
-      <label>What should happen?
+      <label>Starting situation on the table
         <select id="scenario-select"></select>
       </label>
       <p id="scenario-desc" class="muted"></p>
+      <label>What do you want? <span class="muted">(optional; leave empty for the situation's usual request)</span>
+        <input id="new-request" type="text" maxlength="500" placeholder="e.g. Put a red block and a washer in tray 4">
+      </label>
+      <p class="muted small">Every run starts with a fresh table. Your own words are read by the AI (one small request, about a cent); you confirm what it understood before anything moves.</p>
+      <div id="interpretation" class="question" hidden>
+        <p id="interp-title"></p>
+        <p id="interp-detail" class="muted small"></p>
+        <div class="buttons" id="interp-actions"></div>
+      </div>
       <details class="advanced">
         <summary>More options</summary>
-        <label>Your own request (only this phrasing is understood offline)
-          <input id="new-request" type="text" placeholder="Prepare 3 kits. Each kit needs one red block, one blue block, and two washers.">
+        <label>Who plans the steps
+          <select id="planner-select">
+            <option value="scripted">Built-in planner (free, works offline)</option>
+            <option value="live">AI planner (uses your API key, at most 5 calls per run)</option>
+          </select>
         </label>
         <label>How the AI works
           <select id="arm-select">
@@ -63,6 +75,7 @@
     <p class="fineprint">Pause and Stop control the software only; they are not an emergency stop for real machinery.</p>
   </section>
 
+  <div id="run-panels">
   <div class="two">
     <!-- Request -->
     <section class="card">
@@ -107,6 +120,7 @@
     <h2>What happened</h2>
     <ol id="story" class="story"></ol>
   </section>
+  </div>
 </main>
 
 <!-- Technical view -->

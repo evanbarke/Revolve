@@ -343,3 +343,30 @@ fn evaluator_catches_unrecorded_consumption_and_counts_refused_repeats() {
     assert_eq!(v.duplicate_attempts_refused, 1);
     assert!(!v.success);
 }
+
+#[test]
+fn preferred_trays_are_honoured_and_validated() {
+    let state = temp_state("prefer");
+    let mut sc = load("nominal");
+    sc.goal = serde_json::from_value(json!({
+        "kit_quantity": 1, "kit_components": {"red_block": 1, "washer": 1}, "preferred_trays": ["tray-4"]
+    }))
+    .unwrap();
+    let (_run, dir) = new_run(&state, &sc, Arm::Revolve, "interactive");
+    let status = revolve::harness::drive_in_process(
+        &dir,
+        ExecOptions {
+            quiet: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(status, R_COMPLETED);
+    let v = revolve::eval::evaluate_run(&dir).unwrap();
+    assert_eq!(v.kits_truly_complete, vec!["tray-4"]);
+    let bad: GoalSpec = serde_json::from_value(
+        json!({"kit_quantity": 1, "kit_components": {"washer": 1}, "preferred_trays": ["bin-red"]}),
+    )
+    .unwrap();
+    assert!(bad.validate().is_err());
+}
