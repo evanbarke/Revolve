@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revolve Workspace</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Revolve</h1>
+    <p class="sub">Explicit-intent execution runtime &middot; offline simulator (not a physical robot)</p>
+  </div>
+  <div class="runbar">
+    <label>Run <select id="run-select"></select></label>
+    <button id="btn-refresh" class="ghost" type="button">Refresh list</button>
+  </div>
+</header>
+
+<main class="grid">
+  <section class="col left">
+    <div class="card">
+      <h2>New run</h2>
+      <form id="new-run">
+        <label>Scenario <select id="scenario-select"></select></label>
+        <p id="scenario-desc" class="muted small"></p>
+        <label>Architecture
+          <select id="arm-select">
+            <option value="revolve">Revolve (plan &rarr; compile &rarr; execute &rarr; verify)</option>
+            <option value="baseline">Direct tool calling (baseline)</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="scripted-human"> Let the harness play the human (answers, scripted corrections)</label>
+        <label>Request (optional, restricted grammar)
+          <input id="new-request" type="text" placeholder="Prepare 3 kits. Each kit needs one red block, one blue block, and two washers.">
+        </label>
+        <button type="submit">Create run</button>
+      </form>
+      <p class="muted small">Planner: <strong>scripted, rule-based</strong>. It accepts only the kit task family's phrasing; it is not an AI interpretation of free text. Live-model runs are CLI-only and need an explicit budget.</p>
+    </div>
+
+    <div class="card">
+      <h2>Controls</h2>
+      <div class="buttons">
+        <button id="btn-start" type="button">Start / Resume</button>
+        <button id="btn-pause" type="button" class="ghost">Pause</button>
+        <button id="btn-cancel" type="button" class="danger">Cancel run</button>
+      </div>
+      <p class="muted small">Pause and cancel are logical execution controls. They are not a safety-rated emergency stop.</p>
+      <p id="executor-line" class="small"></p>
+    </div>
+
+    <div class="card" id="question-card" hidden>
+      <h2>Your input is needed</h2>
+      <p id="question-prompt"></p>
+      <div id="question-options" class="buttons"></div>
+    </div>
+
+    <div class="card">
+      <h2>Goal <span id="goal-rev" class="pill"></span></h2>
+      <p id="goal-summary"></p>
+      <p id="goal-text" class="muted small"></p>
+      <details>
+        <summary>Change the goal</summary>
+        <form id="correct-form">
+          <div class="row">
+            <label>Kits <input id="c-qty" type="number" min="1" max="8" value="3"></label>
+            <label>Red <input id="c-red" type="number" min="0" max="6" value="1"></label>
+            <label>Blue <input id="c-blue" type="number" min="0" max="6" value="1"></label>
+            <label>Green <input id="c-green" type="number" min="0" max="6" value="0"></label>
+            <label>Washers <input id="c-washer" type="number" min="0" max="6" value="2"></label>
+          </div>
+          <button type="submit">Submit correction</button>
+        </form>
+        <p class="muted small">A correction becomes a new goal revision. Dispatch from the old revision stops; anything already done stays done; the planner replans against what is observed.</p>
+      </details>
+      <ol id="goal-history" class="history small"></ol>
+    </div>
+
+    <div class="card sim">
+      <h2>Simulation controls <span class="pill warn">harness only</span></h2>
+      <p class="muted small">These change the simulated world or its failure modes. The planner never sees them, only their observable effects.</p>
+      <div class="buttons">
+        <button type="button" class="ghost" data-sim="crash_next_place">Crash executor after next place</button>
+        <button type="button" class="ghost" data-sim="timeout_blackout_next_pick">Time out next pick &amp; withhold evidence</button>
+        <button type="button" class="ghost" data-sim="restore_evidence">Restore evidence</button>
+        <button type="button" class="ghost" data-sim="planner_offline">Planner offline</button>
+        <button type="button" class="ghost" data-sim="planner_online">Planner online</button>
+      </div>
+      <div id="tray-toggles" class="buttons"></div>
+    </div>
+  </section>
+
+  <section class="col center">
+    <div class="card">
+      <div class="status-row">
+        <div id="status-badge" class="badge">No run selected</div>
+        <div id="status-reason" class="small"></div>
+      </div>
+      <p id="run-meta" class="muted small"></p>
+    </div>
+    <div class="card">
+      <h2>Workspace <span class="muted small" id="world-rev"></span></h2>
+      <p class="muted small">Simulator ground truth, drawn for you. The system sees only its observations; hatched areas are currently hidden from it.</p>
+      <svg id="workspace" viewBox="0 0 900 380" role="img" aria-label="Simulated workspace"></svg>
+      <div class="legend small">
+        <span><i class="sw red"></i>red block</span><span><i class="sw blue"></i>blue block</span><span><i class="sw green"></i>green block</span><span><i class="sw washer"></i>washer</span><span><i class="sw unknown"></i>unclassified item</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Verified result</h2>
+      <div id="report"></div>
+    </div>
+    <div class="card">
+      <h2>Inventory record</h2>
+      <table id="inventory" class="table small"></table>
+      <details><summary class="small">Ledger (latest)</summary><ol id="ledger" class="history small"></ol></details>
+    </div>
+  </section>
+
+  <section class="col right">
+    <div class="card">
+      <h2>Plan <span id="plan-label" class="pill"></span></h2>
+      <p id="plan-explanation" class="small"></p>
+      <ol id="plans" class="history small"></ol>
+      <ol id="steps" class="steps small"></ol>
+    </div>
+    <div class="card">
+      <h2>Event timeline</h2>
+      <ol id="events" class="events small"></ol>
+    </div>
+  </section>
+</main>
+<div id="toast" class="toast" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>

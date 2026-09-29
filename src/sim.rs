@@ -1007,6 +1007,23 @@ impl SimWorld {
             .collect())
     }
 
+    /// Locations currently withheld from observers (empty unless an evidence blackout is active).
+    pub fn observe_withheld(&self) -> Vec<String> {
+        match Self::blackout(&self.conn) {
+            Ok((true, w)) => w,
+            _ => vec![],
+        }
+    }
+
+    /// Applied-effect counters per capability (the basis of event-triggered faults).
+    pub fn effect_counts(&self) -> Result<std::collections::BTreeMap<String, i64>> {
+        let mut stmt = self.conn.prepare("SELECT capability, applied FROM effect_counters")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<std::result::Result<std::collections::BTreeMap<_, _>, _>>()?;
+        Ok(rows)
+    }
+
     /// Authoritative truth. For the evaluator and the UI's labelled truth panel only.
     pub fn truth(&self) -> Result<Truth> {
         let (rev, init, blackout, poff): (i64, i64, i64, i64) = self.conn.query_row(

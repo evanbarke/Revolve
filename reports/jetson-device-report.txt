@@ -1,0 +1,49 @@
+# Revolve device discovery report
+
+generated_utc: 2026-09-29T13:54:06Z
+script: scripts/jetson-discover.sh (read-only)
+
+## Platform
+- architecture: aarch64
+- kernel: 5.15.148-tegra
+- os: Ubuntu 22.04.5 LTS
+- l4t release: # R36 (release), REVISION: 4.7, GCID: 42132812, BOARD: generic, EABI: aarch64, DATE: Thu Sep 18 22:54:44 UTC 2025
+- board model: NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super
+- cpu cores: 6
+- cpu model: ARMv8 Processor rev 1 (v8l)
+
+## Memory and storage
+- memory:                total        used        free      shared  buff/cache   available
+Mem:           7.4Gi       2.1Gi       177Mi       244Mi       5.2Gi       4.9Gi
+Swap:          3.7Gi       646Mi       3.1Gi
+- home filesystem: 456G total, 283G free, 35% used
+- tmp filesystem: 456G total, 283G free
+
+## Toolchain (PATH, then ~/.cargo/bin)
+- rustc (~/.cargo/bin): rustc 1.95.0 (59807616e 2026-04-14)
+- cargo (~/.cargo/bin): cargo 1.95.0 (f2d3ce0bd 2026-03-21)
+- cc: cc (Ubuntu 11.4.0-1ubuntu1~22.04.2) 11.4.0
+- glibc: ldd (Ubuntu GLIBC 2.35-0ubuntu3.11) 2.35
+
+## NVIDIA software (package versions only; absence is not a failure)
+- nvidia-l4t-core: 36.4.7-20250918154033
+- nvidia-jetpack: not installed
+- cuda-toolkit-12-6: not installed
+- cuda-runtime-12-6: 12.6.11-1
+- libnvinfer10: 10.3.0.30-1+cuda12.5
+- tensorrt: not installed
+- cuda packages (first 5): cuda-cccl-12-6 12.6.37-1
+cuda-crt-12-6 12.6.68-1
+cuda-cub-12-6 
+cuda-cudart-11-2 
+cuda-cudart-12-6 12.6.68-1
+- nvcc: not on PATH
+- nvidia-smi: GPU 0: Orin (nvgpu) (UUID redacted)
+
+## Power and thermal (read-only; only if permitted)
+- nvpmodel query: NV Power Mode: MAXN_SUPER
+2
+- tegrastats (3 samples): 09-29-2026 15:54:07 RAM 2458/7620MB (lfb 9x4MB) SWAP 646/3810MB (cached 17MB) CPU [5%@729,5%@729,2%@729,4%@729,1%@729,0%@729] GR3D_FREQ 0% cpu@55.656C soc2@54.687C soc0@55.875C gpu@56C tj@56.156C soc1@56.156C VDD_IN 4672mW/4672mW VDD_CPU_GPU_CV 637mW/637mW VDD_SOC 1435mW/1435mW
+09-29-2026 15:54:08 RAM 2458/7620MB (lfb 9x4MB) SWAP 646/3810MB (cached 17MB) CPU [0%@729,0%@729,0%@729,0%@1728,1%@729,0%@729] GR3D_FREQ 0% cpu@55.843C soc2@54.656C soc0@55.781C gpu@55.718C tj@56.093C soc1@56.093C VDD_IN 4552mW/4612mW VDD_CPU_GPU_CV 558mW/598mW VDD_SOC 1437mW/1436mW
+09-29-2026 15:54:09 RAM 2457/7620MB (lfb 9x4MB) SWAP 646/3810MB (cached 17MB) CPU [5%@729,5%@729,4%@729,3%@729,2%@729,2%@729] GR3D_FREQ 0% cpu@55.5C soc2@54.625C soc0@55.812C gpu@55.687C tj@56.218C soc1@56.218C VDD_IN 4784mW/4669mW VDD_CPU_GPU_CV 716mW/637mW VDD_SOC 1433mW/1435mW
+- thermal zones: cpu-thermal=55593 gpu-thermal=55750 cv0-thermal= cv1-thermal= cv2-thermal= soc0-thermal=55718 soc1-thermal=56031 soc2-thermal=54718 tj-thermal=56093 
