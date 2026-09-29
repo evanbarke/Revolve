@@ -175,6 +175,7 @@ pre.code .ln.cur { background: var(--cur); border-left-color: var(--warn); }
 pre.code .ln.err { background: var(--bad-bg); border-left-color: var(--bad); }
 pre.code .kw { color: var(--kw); font-weight: 600; } pre.code .str { color: var(--str); } pre.code .num-lit { color: var(--num); }
 pre.code .com { color: var(--com); font-style: italic; } pre.code .fn { color: var(--fn); font-weight: 600; }
+pre.code.typing .ln:last-child::after { content: "▍"; color: var(--accent); animation: blink 1s steps(2, end) infinite; }
 textarea.code-edit { font-variant-ligatures: none; font: 13px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; min-height: 320px; }
 ul.checks { list-style: none; margin: 0; padding: 0; }
 ul.checks li { padding: 4px 0 4px 26px; position: relative; border-bottom: 1px dashed var(--line); }
@@ -189,6 +190,15 @@ ul.checks .detail { display: block; color: var(--muted); font-size: 12px; }
 .writing { display: flex; align-items: center; gap: 10px; font-size: 15px; }
 .dots::after { content: "…"; animation: blink 1s steps(3, end) infinite; }
 @keyframes blink { 50% { opacity: .3; } }
+.cell-card { padding-bottom: 10px; }
+.cell-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cell-head h2 { margin: 0; }
+.cell-hud { margin: 6px 0 8px; font-weight: 600; min-height: 1.3em; }
+.cell3d { width: 100%; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+.cell3d canvas { display: block; width: 100% !important; touch-action: none; }
+.speed { display: flex; gap: 4px; align-items: center; font-size: 13px; color: var(--muted); }
+.speed button { padding: 3px 9px; font-size: 13px; }
+.speed button.on { background: var(--accent); color: #fff; }
 .change-box { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
 .sw.arm { background: var(--arm); border-radius: 50%; }
 #workspace .arm-link { stroke: var(--arm); stroke-width: 12; stroke-linecap: round; }

@@ -54,7 +54,12 @@ pub struct FiredHumanAction {
 
 pub struct SimWorld {
     conn: Connection,
+    /// The slot a place command is heading for (set while the arm moves there).
+    pending_place: Option<motion::Placement>,
 }
+
+mod motion;
+pub use motion::Placement;
 
 /// Ground truth for the evaluator and the UI's "simulator truth" panel.
 #[derive(Debug, Clone, Serialize)]
@@ -105,7 +110,9 @@ CREATE TABLE IF NOT EXISTS world_meta (
   initial_object_count INTEGER NOT NULL,
   blackout INTEGER NOT NULL DEFAULT 0,
   blackout_withhold TEXT NOT NULL DEFAULT '[]',
-  planner_offline INTEGER NOT NULL DEFAULT 0
+  planner_offline INTEGER NOT NULL DEFAULT 0,
+  speed REAL NOT NULL DEFAULT 0,
+  arm TEXT
 );
 CREATE TABLE IF NOT EXISTS locations (
   location_id TEXT PRIMARY KEY,
@@ -117,7 +124,11 @@ CREATE TABLE IF NOT EXISTS objects (
   object_id TEXT PRIMARY KEY,
   true_kind TEXT NOT NULL,
   observed_kind TEXT NOT NULL,
-  location_id TEXT NOT NULL REFERENCES locations(location_id)
+  location_id TEXT NOT NULL REFERENCES locations(location_id),
+  x REAL,
+  y REAL,
+  z REAL,
+  slot INTEGER
 );
 -- The gripper holds at most one object (single location per object is structural).
 CREATE UNIQUE INDEX IF NOT EXISTS gripper_single ON objects(location_id) WHERE location_id = 'gripper';
@@ -200,6 +211,7 @@ impl SimWorld {
         }
         let mut conn = Self::open_conn(path)?;
         conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(motion::MOTION_SCHEMA)?;
         let tx = conn.transaction()?;
         let mut locs: Vec<(String, LocationType, Option<String>)> =
             vec![(GRIPPER.into(), LocationType::Gripper, None)];
@@ -281,8 +293,16 @@ impl SimWorld {
                 params![c],
             )?;
         }
+        motion::assign_slots(&tx)?;
+        tx.execute(
+            "UPDATE world_meta SET arm = ?1 WHERE id = 1",
+            params![serde_json::to_string(&crate::cell::home())?],
+        )?;
         tx.commit()?;
-        Ok(SimWorld { conn })
+        Ok(SimWorld {
+            conn,
+            pending_place: None,
+        })
     }
 
     /// Copy this world as a consistent snapshot for a rehearsal (a digital twin):
@@ -292,7 +312,7 @@ impl SimWorld {
             .execute("VACUUM INTO ?1", params![path.to_string_lossy()])?;
         let c = Connection::open(path)?;
         c.execute_batch(
-            "DELETE FROM faults; UPDATE world_meta SET blackout = 0, blackout_withhold = '[]', planner_offline = 0 WHERE id = 1;",
+            "DELETE FROM faults; UPDATE world_meta SET blackout = 0, blackout_withhold = '[]', planner_offline = 0, speed = 0 WHERE id = 1;",
         )?;
         Ok(())
     }
@@ -301,8 +321,11 @@ impl SimWorld {
         if !path.exists() {
             bail!("world store {} does not exist", path.display());
         }
+        let mut conn = Self::open_conn(path)?;
+        motion::migrate(&mut conn)?;
         Ok(SimWorld {
-            conn: Self::open_conn(path)?,
+            conn,
+            pending_place: None,
         })
     }
 
@@ -433,26 +456,6 @@ impl SimWorld {
 
     // ---------------------------------------------------------------- effects
 
-    pub fn pick(
-        &mut self,
-        op_key: &str,
-        object_id: &str,
-        source_id: &str,
-    ) -> (AdapterOutcome, Vec<FiredHumanAction>) {
-        let args = json!({"object_id": object_id, "source_id": source_id});
-        self.effect(op_key, "workspace.pick", &args)
-    }
-
-    pub fn place(
-        &mut self,
-        op_key: &str,
-        object_id: &str,
-        destination_id: &str,
-    ) -> (AdapterOutcome, Vec<FiredHumanAction>) {
-        let args = json!({"object_id": object_id, "destination_id": destination_id});
-        self.effect(op_key, "workspace.place", &args)
-    }
-
     fn effect(
         &mut self,
         op_key: &str,
@@ -478,6 +481,7 @@ impl SimWorld {
         args: &Value,
     ) -> Result<(AdapterOutcome, Vec<FiredHumanAction>)> {
         let fp = fingerprint(&json!({"capability": capability, "args": args}));
+        let pending = self.pending_place.clone();
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -616,6 +620,7 @@ impl SimWorld {
             "UPDATE objects SET location_id = ?1 WHERE object_id = ?2",
             params![to, object_id],
         )?;
+        motion::settle_position(&tx, pending.as_ref(), capability, object_id, &to)?;
         let rev = Self::bump_revision(&tx)?;
         tx.execute(
             "UPDATE effect_counters SET applied = applied + 1 WHERE capability = ?1",
@@ -663,7 +668,7 @@ impl SimWorld {
                         }
                         FaultSpec::RemoveObject { object_id, .. } => {
                             tx.execute(
-                                "UPDATE objects SET location_id = 'outside' WHERE object_id = ?1 AND location_id != 'gripper'",
+                                "UPDATE objects SET location_id = 'outside', slot = NULL, x = NULL, y = NULL, z = NULL WHERE object_id = ?1 AND location_id != 'gripper'",
                                 params![object_id],
                             )?;
                             Self::bump_revision(&tx)?;

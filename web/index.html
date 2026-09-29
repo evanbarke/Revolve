@@ -76,6 +76,17 @@
     </div>
   </section>
 
+  <!-- The robot cell, live in 3D -->
+  <section class="card cell-card" id="cell-card" hidden>
+    <div class="cell-head">
+      <h2>The robot cell <span class="pill">live</span></h2>
+      <div id="speed-buttons" class="speed" hidden></div>
+    </div>
+    <p id="cell-hud" class="cell-hud"></p>
+    <div id="cell3d" class="cell3d"></div>
+    <p class="muted small">Drag to turn, pinch or scroll to zoom. A simulated arm with real joint limits and speeds: every move you see is planned and carried out by the simulator, not animated for show. The blue see-through arm replays a rehearsal.</p>
+  </section>
+
   <!-- A proposed program, before it runs -->
   <section class="card program" id="program-card" hidden></section>
 
@@ -138,8 +149,8 @@
     </section>
   </div>
 
-  <!-- Workspace -->
-  <section class="card">
+  <!-- Workspace (2D fallback when 3D graphics are unavailable) -->
+  <section class="card" id="workspace-card">
     <h2>Workspace</h2>
     <svg id="workspace" viewBox="0 0 900 380" role="img" aria-label="Simulated workspace"></svg>
     <div class="legend small">
@@ -201,6 +212,7 @@
   </section>
 </main>
 <div id="toast" class="toast" hidden></div>
+<script type="module" src="/scene.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

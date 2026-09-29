@@ -590,6 +590,18 @@ impl LivePlanner {
         table: &Value,
         previous: Option<(&str, &[String])>,
     ) -> (std::result::Result<WrittenProgram, PlannerError>, CallInfo) {
+        self.write_program_streaming(request, table, previous, &mut |_| {})
+    }
+
+    /// As `write_program`, streaming: `on_text` receives the model's output so far
+    /// (partial JSON) as it arrives, so a person can watch the program being written.
+    pub fn write_program_streaming(
+        &mut self,
+        request: &str,
+        table: &Value,
+        previous: Option<(&str, &[String])>,
+        on_text: &mut dyn FnMut(&str),
+    ) -> (std::result::Result<WrittenProgram, PlannerError>, CallInfo) {
         let system = format!("{WRITE_SYSTEM}\n\n{}", crate::script::GUIDE);
         let mut input = json!({"request": request, "table": table});
         if let Some((src, problems)) = previous {
@@ -601,7 +613,7 @@ impl LivePlanner {
         body["max_tokens"] = json!(8000);
         body["output_config"]["format"] =
             json!({"type": "json_schema", "schema": program_schema()});
-        let (r, info) = self.post(body);
+        let (r, info) = self.post_streaming(body, on_text);
         (
             r.and_then(|v| {
                 parse_messages_response(&v).map(|(env, _, _)| written_from_envelope(&env))
@@ -609,6 +621,40 @@ impl LivePlanner {
             info,
         )
     }
+}
+
+/// The text of a JSON string field in a possibly unfinished JSON document (for
+/// showing a streamed answer while it is written). `None` until the field starts.
+pub fn partial_json_string(text: &str, key: &str) -> Option<String> {
+    let k = format!("\"{key}\"");
+    let at = text.find(&k)? + k.len();
+    let rest = text[at..]
+        .trim_start()
+        .strip_prefix(':')?
+        .trim_start()
+        .strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => break,
+            '\\' => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => {}
+                Some('u') => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                        out.push(ch);
+                    }
+                }
+                Some(other) => out.push(other),
+                None => break,
+            },
+            other => out.push(other),
+        }
+    }
+    Some(out)
 }
 
 /// Map a tool name back to a capability id (first `_` becomes `.`).
@@ -894,6 +940,169 @@ impl LivePlanner {
 
     /// Transport: budget, headers, bounded retries, usage accounting. Returns the
     /// full response body on HTTP 200.
+    /// As `post`, with `stream: true`: text deltas go to `on_text` (the whole text
+    /// so far) as they arrive, and the result is assembled into the same shape as a
+    /// non-streaming response, so everything downstream parses it unchanged.
+    fn post_streaming(
+        &mut self,
+        mut body: Value,
+        on_text: &mut dyn FnMut(&str),
+    ) -> (std::result::Result<Value, PlannerError>, CallInfo) {
+        use std::io::BufRead;
+        let started = Instant::now();
+        let mut info = CallInfo::default();
+        let Some(key) = self
+            .test_key
+            .clone()
+            .or_else(|| secret(&self.config.api_key_env))
+        else {
+            return (
+                Err(PlannerError::NotConfigured {
+                    message: format!("{} not set", self.config.api_key_env),
+                }),
+                info,
+            );
+        };
+        if !self.budget.try_consume() {
+            return (
+                Err(PlannerError::BudgetExhausted {
+                    message: "API-call budget exhausted".into(),
+                }),
+                info,
+            );
+        }
+        info.transport_attempts = 1;
+        body["stream"] = json!(true);
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_millis(self.config.timeout_ms)))
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut req = agent
+            .post(&self.config.endpoint)
+            .header("content-type", "application/json")
+            .header("x-api-key", &key)
+            .header("anthropic-version", &self.config.anthropic_version);
+        if self.config.refusal_fallback.is_some() {
+            req = req.header("anthropic-beta", "server-side-fallback-2026-07-01");
+        }
+        let mut resp = match req.send(body.to_string().as_str()) {
+            Err(ureq::Error::Timeout(_)) => return (Err(PlannerError::Timeout), info),
+            Err(e) => {
+                return (
+                    Err(PlannerError::Unavailable {
+                        message: format!("transport: {e}"),
+                    }),
+                    info,
+                );
+            }
+            Ok(r) => r,
+        };
+        let status = resp.status().as_u16();
+        let reader = resp
+            .body_mut()
+            .with_config()
+            .limit(self.config.max_response_bytes)
+            .reader();
+        if status != 200 {
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut std::io::BufReader::new(reader), &mut text);
+            let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+            let msg = format!(
+                "HTTP {status} {}: {}",
+                v.pointer("/error/type")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+                v.pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .chars()
+                    .take(300)
+                    .collect::<String>()
+            );
+            info.latency_ms = started.elapsed().as_millis() as i64;
+            return (
+                Err(if status == 429 || status >= 500 {
+                    PlannerError::Unavailable { message: msg }
+                } else {
+                    PlannerError::NotConfigured { message: msg }
+                }),
+                info,
+            );
+        }
+        let (mut text, mut model, mut id, mut stop) =
+            (String::new(), Value::Null, Value::Null, Value::Null);
+        let (mut tin, mut tout) = (None, None);
+        for line in std::io::BufReader::new(reader).lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(e) => {
+                    return (
+                        Err(PlannerError::Unavailable {
+                            message: format!("stream: {e}"),
+                        }),
+                        info,
+                    );
+                }
+            };
+            let Some(data) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let Ok(ev) = serde_json::from_str::<Value>(data.trim()) else {
+                continue;
+            };
+            match ev["type"].as_str().unwrap_or("") {
+                "message_start" => {
+                    model = ev.pointer("/message/model").cloned().unwrap_or(Value::Null);
+                    id = ev.pointer("/message/id").cloned().unwrap_or(Value::Null);
+                    tin = ev
+                        .pointer("/message/usage/input_tokens")
+                        .and_then(Value::as_u64);
+                }
+                "content_block_delta" => {
+                    if let Some(t) = ev.pointer("/delta/text").and_then(Value::as_str) {
+                        text.push_str(t);
+                        on_text(&text);
+                    }
+                }
+                "message_delta" => {
+                    stop = ev
+                        .pointer("/delta/stop_reason")
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    tout = ev
+                        .pointer("/usage/output_tokens")
+                        .and_then(Value::as_u64)
+                        .or(tout);
+                }
+                "error" => {
+                    let m = ev
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("stream error");
+                    return (
+                        Err(PlannerError::Unavailable {
+                            message: m.chars().take(300).collect(),
+                        }),
+                        info,
+                    );
+                }
+                _ => {}
+            }
+        }
+        info.latency_ms = started.elapsed().as_millis() as i64;
+        info.usage = tin.zip(tout);
+        info.detail = Some(
+            json!({"served_model": model, "request_id": id, "stop_reason": stop, "streamed": true}),
+        );
+        let assembled = json!({
+            "id": id, "model": model, "stop_reason": stop, "type": "message", "role": "assistant",
+            "content": [{"type": "text", "text": text}],
+            "usage": {"input_tokens": tin.unwrap_or(0), "output_tokens": tout.unwrap_or(0)},
+        });
+        (Ok(assembled), info)
+    }
+
     fn post(&mut self, body: Value) -> (std::result::Result<Value, PlannerError>, CallInfo) {
         let started = Instant::now();
         let mut info = CallInfo::default();
@@ -1322,9 +1531,13 @@ mod tests {
                 let mut b = String::new();
                 let _ = std::io::Read::read_to_string(req.as_reader(), &mut b);
                 seen.push((headers, serde_json::from_str(&b).unwrap_or(Value::Null)));
-                let _ = req.respond(
-                    tiny_http::Response::from_string(body.to_string()).with_status_code(status),
-                );
+                // A JSON string is sent as raw text (e.g. a server-sent event stream).
+                let text = match &body {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                let _ =
+                    req.respond(tiny_http::Response::from_string(text).with_status_code(status));
             }
             seen
         });
@@ -1403,6 +1616,67 @@ mod tests {
         assert!(body.get("thinking").is_none());
     }
 
+    /// A Messages API answer as a server-sent event stream, split mid-text.
+    fn sse(envelope: Value) -> Value {
+        let text = envelope.to_string();
+        let mid = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .find(|i| *i >= text.len() / 2)
+            .unwrap_or(0);
+        let (a, b) = text.split_at(mid);
+        let ev = |v: Value| {
+            format!(
+                "event: e
+data: {v}
+
+"
+            )
+        };
+        let mut out = ev(
+            json!({"type": "message_start", "message": {"id": "msg_1", "model": "fake-model", "usage": {"input_tokens": 1200}}}),
+        );
+        for part in [a, b] {
+            out += &ev(
+                json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": part}}),
+            );
+        }
+        out += &ev(
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 340}}),
+        );
+        out += &ev(json!({"type": "message_stop"}));
+        Value::String(out)
+    }
+
+    #[test]
+    fn partial_json_strings_can_be_read_while_streaming() {
+        assert_eq!(
+            partial_json_string(
+                r#"{"understood": true, "explanation": "The arm will"#,
+                "explanation"
+            )
+            .as_deref(),
+            Some("The arm will")
+        );
+        assert_eq!(
+            partial_json_string(
+                r#"{"program": "a
+b\"c"#,
+                "program"
+            )
+            .as_deref(),
+            Some(
+                "a
+b\"c"
+            )
+        );
+        assert_eq!(
+            partial_json_string(r#"{"program": "done", "x": 1}"#, "program").as_deref(),
+            Some("done")
+        );
+        assert_eq!(partial_json_string(r#"{"understood": tr"#, "program"), None);
+    }
+
     #[test]
     fn program_writing_sends_the_guide_and_table_and_parses_the_program() {
         let program = "# Clear the table
@@ -1412,9 +1686,8 @@ expect count(\"table\") == 0, \"the table is clear\"
 ";
         let (url, h) = fake_server(vec![(
             200,
-            fixture(
-                json!({"understood": true, "program": program, "explanation": "Everything goes to tray 1.", "not_possible": ""}),
-                "end_turn",
+            sse(
+                json!({"understood": true, "explanation": "Everything goes to tray 1.", "program": program, "not_possible": ""}),
             ),
         )]);
         let (mut p, _b) = fake_planner(&url, 3, 0);
@@ -1431,6 +1704,7 @@ expect count(\"table\") == 0, \"the table is clear\"
         assert_eq!(w.explanation, "Everything goes to tray 1.");
         let seen = h.join().unwrap();
         let body = &seen[0].1;
+        assert_eq!(body["stream"], true, "program writing streams");
         assert!(
             body["system"]
                 .as_str()

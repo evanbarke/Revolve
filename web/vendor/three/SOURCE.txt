@@ -1,0 +1,3 @@
+three.js r186 (0.186.1) from the npm registry, sha512 checked against the registry.
+Files: build/three.module.js, build/three.core.js, examples/jsm/controls/OrbitControls.js (import rewritten to ./three.module.js).
+License: MIT (LICENSE).

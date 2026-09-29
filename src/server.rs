@@ -39,6 +39,11 @@ use tiny_http::{Header, Method, Request, Response, Server};
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_JS: &str = include_str!("../web/app.js");
 const STYLE_CSS: &str = include_str!("../web/style.css");
+const SCENE_JS: &str = include_str!("../web/scene.js");
+// three.js r186 (MIT), vendored; see web/vendor/three/SOURCE.txt.
+const THREE_MODULE: &str = include_str!("../web/vendor/three/three.module.js");
+const THREE_CORE: &str = include_str!("../web/vendor/three/three.core.js");
+const THREE_ORBIT: &str = include_str!("../web/vendor/three/OrbitControls.js");
 const MAX_BODY: u64 = 64 * 1024;
 
 /// Identifies the page this server serves. Every response carries it, so a page
@@ -47,7 +52,11 @@ const MAX_BODY: u64 = 64 * 1024;
 fn build_id() -> &'static str {
     static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     ID.get_or_init(|| {
-        crate::util::sha256_hex([INDEX_HTML, APP_JS, STYLE_CSS].concat().as_bytes())[..12]
+        crate::util::sha256_hex(
+            [INDEX_HTML, APP_JS, STYLE_CSS, SCENE_JS]
+                .concat()
+                .as_bytes(),
+        )[..12]
             .to_string()
     })
 }
@@ -233,6 +242,19 @@ fn respond(req: Request, status: u16, content_type: &str, body: String) {
     let _ = req.respond(resp);
 }
 
+fn respond_cached(req: Request, body: &'static str) {
+    let resp = Response::from_string(body)
+        .with_status_code(200)
+        .with_header(header("Content-Type", "text/javascript; charset=utf-8"))
+        .with_header(header(
+            "Cache-Control",
+            "public, max-age=31536000, immutable",
+        ))
+        .with_header(header("X-Content-Type-Options", "nosniff"))
+        .with_header(header("X-Revolve-Build", build_id()));
+    let _ = req.respond(resp);
+}
+
 fn json_resp(req: Request, status: u16, v: &Value) {
     respond(req, status, "application/json", v.to_string());
 }
@@ -278,7 +300,7 @@ pub fn mutation_allowed(
     Ok(())
 }
 
-fn handle(ctx: &Ctx, mut req: Request) {
+fn handle(ctx: &Arc<Ctx>, mut req: Request) {
     let url = req.url().to_string();
     let path = url.split('?').next().unwrap_or("").to_string();
     let method = req.method().clone();
@@ -352,6 +374,13 @@ fn handle(ctx: &Ctx, mut req: Request) {
                 );
             }
             "/app.js" => return respond(req, 200, "text/javascript; charset=utf-8", APP_JS.into()),
+            "/scene.js" => {
+                return respond(req, 200, "text/javascript; charset=utf-8", SCENE_JS.into());
+            }
+            // Versioned third-party files never change at a given path: cache them.
+            "/vendor/three-r186/three.module.js" => return respond_cached(req, THREE_MODULE),
+            "/vendor/three-r186/three.core.js" => return respond_cached(req, THREE_CORE),
+            "/vendor/three-r186/OrbitControls.js" => return respond_cached(req, THREE_ORBIT),
             "/style.css" => return respond(req, 200, "text/css; charset=utf-8", STYLE_CSS.into()),
             _ => {}
         }
@@ -392,9 +421,12 @@ fn handle(ctx: &Ctx, mut req: Request) {
         (Method::Post, ["api", "runs"]) => create(ctx, &body),
         (Method::Post, ["api", "interpret"]) => interpret(ctx, &body),
         (Method::Get, ["api", "programs", "examples"]) => program_examples(),
-        (Method::Post, ["api", "programs", "write"]) => program_write(ctx, &body),
+        (Method::Post, ["api", "programs", "write"]) => program_write_start(ctx, &body),
+        (Method::Get, ["api", "programs", "jobs", id]) => job_status(id),
         (Method::Post, ["api", "programs", "check"]) => program_check(ctx, &body),
         (Method::Get, ["api", "runs", id]) => run_view(ctx, id),
+        (Method::Get, ["api", "runs", id, "scene"]) => run_scene(ctx, id, &url),
+        (Method::Get, ["api", "scenarios", id, "scene"]) => scenario_scene(ctx, id),
         (Method::Post, ["api", "runs", id, action]) => act(ctx, id, action, &body),
         _ => Err(Error::new("not found")),
     };
@@ -493,11 +525,46 @@ fn create(ctx: &Ctx, body: &str) -> Result<Value> {
     };
     let engine = crate::program::ExecEngine::parse(v["engine"].as_str().unwrap_or("compiled"))
         .map_err(Error::new)?;
-    let (run_id, _) = harness::create_run_with(&ctx.state_dir, &sc, arm, &choice, human, engine)?;
+    let (run_id, dir) = harness::create_run_with(&ctx.state_dir, &sc, arm, &choice, human, engine)?;
+    set_world_speed(&dir, &v)?;
     Ok(json!({"run_id": run_id}))
 }
 
 const LIVE_CONFIG: &str = "config/planner.json";
+
+/// Motion speed for runs started from the UI, as a multiple of real time.
+const UI_SPEED: f64 = 1.5;
+
+fn set_world_speed(dir: &Path, v: &Value) -> Result<()> {
+    let speed = v["speed"].as_f64().unwrap_or(UI_SPEED).clamp(0.25, 8.0);
+    SimWorld::open(&dir.join("world.db"))?.set_speed(speed)
+}
+
+/// A scenario's table before any run: a fresh world, read and discarded.
+fn scenario_scene(ctx: &Ctx, name: &str) -> Result<Value> {
+    let name = scenario_name(&json!({"scenario": name}), "messy-table")?;
+    let sc = Scenario::load(&scenario::resolve(&name, &ctx.scenarios_dir)?)?;
+    let tmp = ctx
+        .state_dir
+        .join("validate")
+        .join(crate::util::fresh_id("scene"));
+    std::fs::create_dir_all(&tmp)?;
+    let out = SimWorld::create(&tmp.join("world.db"), &sc).and_then(|w| w.scene(0));
+    let _ = std::fs::remove_dir_all(&tmp);
+    out
+}
+
+/// The live robot cell for a 3D view: places, parts, the arm and its motion segments.
+fn run_scene(ctx: &Ctx, run_id: &str, url: &str) -> Result<Value> {
+    let dir = harness::run_dir(&ctx.state_dir, run_id)?;
+    let since = url
+        .split_once('?')
+        .and_then(|(_, q)| q.split('&').find_map(|kv| kv.strip_prefix("since=")))
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    SimWorld::open(&dir.join("world.db"))?.scene(since)
+}
 
 /// AI calls this server process may make in total (a safety net on top of the
 /// per-request caps). Restart the server to allow more.
@@ -601,8 +668,9 @@ fn create_program(ctx: &Ctx, v: &Value) -> Result<Value> {
         .filter(|a| !a.is_empty())
         .unwrap_or("human (ui)")
         .to_string();
-    let (run_id, _) =
+    let (run_id, dir) =
         harness::create_program_run(&ctx.state_dir, &sc, proposal, &author, "interactive")?;
+    set_world_speed(&dir, v)?;
     Ok(json!({"run_id": run_id}))
 }
 
@@ -667,7 +735,48 @@ fn program_check(ctx: &Ctx, body: &str) -> Result<Value> {
 /// The AI writes a program for the person's words; the checker's messages go
 /// back to it for up to two repairs. Then it is rehearsed on a twin. At most 3
 /// calls per request, each with a cost estimate from the dated pricing config.
-fn program_write(ctx: &Ctx, body: &str) -> Result<Value> {
+/// Program-writing jobs: the AI's output streams into the job's state, which the
+/// page polls, so a person watches the program being written.
+fn jobs() -> &'static Mutex<HashMap<String, (std::time::Instant, Value)>> {
+    static JOBS: std::sync::OnceLock<Mutex<HashMap<String, (std::time::Instant, Value)>>> =
+        std::sync::OnceLock::new();
+    JOBS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn set_job(id: &str, state: Value) {
+    if let Ok(mut j) = jobs().lock() {
+        j.retain(|_, (t, _)| t.elapsed().as_secs() < 3600);
+        j.insert(id.to_string(), (std::time::Instant::now(), state));
+    }
+}
+
+fn job_status(id: &str) -> Result<Value> {
+    let j = jobs().lock().map_err(|_| Error::new("lock poisoned"))?;
+    j.get(id)
+        .map(|(_, v)| v.clone())
+        .ok_or_else(|| Error::new("no such job (it may have expired)"))
+}
+
+fn program_write_start(ctx: &Arc<Ctx>, body: &str) -> Result<Value> {
+    let v: Value = serde_json::from_str(body)?;
+    let text = v["text"].as_str().unwrap_or("").trim();
+    if text.is_empty() || text.len() > 800 {
+        crate::bail!("say what you want in a few sentences (up to 800 characters)");
+    }
+    let id = crate::util::fresh_id("job");
+    set_job(&id, json!({"phase": "starting"}));
+    let (ctx, body, jid) = (ctx.clone(), body.to_string(), id.clone());
+    std::thread::spawn(move || {
+        let progress = |p: Value| set_job(&jid, p);
+        match program_write(&ctx, &body, &progress) {
+            Ok(r) => set_job(&jid, json!({"phase": "done", "result": r})),
+            Err(e) => set_job(&jid, json!({"phase": "error", "error": e.msg})),
+        }
+    });
+    Ok(json!({"job": id}))
+}
+
+fn program_write(ctx: &Ctx, body: &str, progress: &dyn Fn(Value)) -> Result<Value> {
     let v: Value = serde_json::from_str(body)?;
     let text = v["text"].as_str().unwrap_or("").trim().to_string();
     if text.is_empty() || text.len() > 800 {
@@ -717,17 +826,31 @@ fn program_write(ctx: &Ctx, body: &str) -> Result<Value> {
     let mut attempts = vec![];
     let mut previous: Option<(String, Vec<String>)> = None;
     let mut last = None;
-    for _ in 0..3 {
+    for attempt in 1..=3 {
+        progress(
+            json!({"phase": "writing", "attempt": attempt, "problems": previous.as_ref().map(|(_, p)| p.clone())}),
+        );
         if AI_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= MAX_AI_CALLS_PER_PROCESS {
             crate::bail!(
                 "this server has used its {MAX_AI_CALLS_PER_PROCESS} AI calls; restart it to allow more"
             );
         }
-        let (r, info) = planner.write_program(
+        let problems = previous.as_ref().map(|(_, p)| p.clone());
+        let (r, info) = planner.write_program_streaming(
             &text,
             &summary,
             previous.as_ref().map(|(s, p)| (s.as_str(), p.as_slice())),
+            &mut |partial: &str| {
+                progress(json!({
+                    "phase": "writing",
+                    "attempt": attempt,
+                    "problems": problems,
+                    "explanation": crate::planner::live::partial_json_string(partial, "explanation"),
+                    "program": crate::planner::live::partial_json_string(partial, "program"),
+                }))
+            },
         );
+        progress(json!({"phase": "checking", "attempt": attempt}));
         if let Some((a, b)) = info.usage {
             tin += a;
             tout += b;
@@ -775,12 +898,17 @@ fn program_write(ctx: &Ctx, body: &str) -> Result<Value> {
         crate::bail!("the AI did not answer");
     };
     let rehearsal = match &compiled {
-        Some(_) => Some(harness::rehearse(
-            &ctx.state_dir,
-            &t.world,
-            &t.goal,
-            &w.source,
-        )?),
+        Some(_) => {
+            progress(
+                json!({"phase": "rehearsing", "program": w.source, "explanation": w.explanation}),
+            );
+            Some(harness::rehearse(
+                &ctx.state_dir,
+                &t.world,
+                &t.goal,
+                &w.source,
+            )?)
+        }
         None => None,
     };
     let diagnostics = match (&compiled, &previous) {
@@ -975,6 +1103,17 @@ fn act(ctx: &Ctx, run_id: &str, action: &str, body: &str) -> Result<Value> {
         "sim" => {
             let mut w = SimWorld::open(&dir.join("world.db"))?;
             let what = v["control"].as_str().unwrap_or("");
+            if what == "speed" {
+                // A viewing preference, not an intervention in the task.
+                let s = v["value"]
+                    .as_f64()
+                    .ok_or_else(|| Error::new("value required"))?
+                    .clamp(0.25, 8.0);
+                w.set_speed(s)?;
+                return Ok(
+                    json!({"ok": true, "message": format!("the arm now moves at {s}x real time")}),
+                );
+            }
             match what {
                 "restore_evidence" => w.set_blackout(false)?,
                 "planner_offline" => w.set_planner_offline(true)?,

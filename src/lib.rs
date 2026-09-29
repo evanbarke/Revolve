@@ -7,6 +7,7 @@
 pub mod baseline;
 pub mod bookkeeping;
 pub mod capability;
+pub mod cell;
 pub mod codegen;
 pub mod compiler;
 pub mod eval;

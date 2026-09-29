@@ -732,7 +732,11 @@ function renderReview(card, r, opts) {
   }
   card.append(h("div", { class: "prog-grid" }, left, right), buttons);
   const canRun = r.accepted && r.rehearsal && r.rehearsal.status !== "blocked" && r.rehearsal.status !== "failed";
-  if (canRun) buttons.append(actionButton(opts.runLabel || "Run it for real", () => opts.onRun(r), "big"));
+  if (canRun) buttons.append(actionButton(opts.runLabel || "Run it for real", () => { if (cell3d) window.RevolveCell.stopPreview(); opts.onRun(r); }, "big"));
+  if (r.rehearsal && r.rehearsal.motions && r.rehearsal.motions.length && cell3d) {
+    buttons.append(actionButton("Replay the rehearsal", () => { previewRehearsal(r.rehearsal); $("cell-card").scrollIntoView({ behavior: "smooth", block: "start" }); }, "ghost"));
+    previewRehearsal(r.rehearsal);
+  }
   buttons.append(actionButton("Edit the program", () => {
     const editing = edit.hidden;
     edit.hidden = !editing;
@@ -761,12 +765,55 @@ function writingState(card, what) {
 
 function startWhere() { return { scenario: $("scenario-select").value }; }
 
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+const PHASES = {
+  starting: "Starting",
+  writing: "The AI is writing the program",
+  checking: "Checking it against the table and compiling it to machine code",
+  rehearsing: "Rehearsing it on a copy of the table",
+};
+
+// Show the program as the AI writes it, then each check as it happens.
+function renderWriting(card, st, title, t0) {
+  clear(card);
+  card.hidden = false;
+  card.append(h("div", { class: "prog-head" }, h("h2", {}, title), h("span", { class: "muted small" }, Math.round((Date.now() - t0) / 1000) + " s")));
+  const repairing = st.phase === "writing" && st.problems && st.problems.length;
+  card.append(h("div", { class: "writing" }, h("span", { class: "dots" }, repairing ? "The checker found problems; the AI is fixing them" : PHASES[st.phase] || st.phase)));
+  if (repairing) {
+    const box = h("div", {});
+    for (const p of st.problems) box.append(h("p", { class: "diag" }, p));
+    card.append(box);
+  }
+  if (st.explanation) card.append(h("p", { class: "explain" }, st.explanation));
+  if (st.program) {
+    const pre = codeView(st.program);
+    pre.classList.add("typing");
+    card.append(pre);
+    pre.scrollTop = pre.scrollHeight;
+  }
+}
+
+// Start a writing job and follow it until it is done.
+async function followWriteJob(body, card, title) {
+  const { job } = await api("POST", "/api/programs/write", body);
+  const t0 = Date.now();
+  for (;;) {
+    await sleep(250);
+    const st = await api("GET", "/api/programs/jobs/" + encodeURIComponent(job));
+    if (st.phase === "done") return st.result;
+    if (st.phase === "error") throw new Error(st.error);
+    renderWriting(card, st, title, t0);
+  }
+}
+
 async function writeProgram(text) {
   const card = $("program-card");
   const stop = writingState(card, "The AI is writing a program for: “" + text + "”");
   card.scrollIntoView({ behavior: "smooth", block: "start" });
   try {
-    const r = await api("POST", "/api/programs/write", Object.assign({ text }, startWhere()));
+    const r = await followWriteJob(Object.assign({ text }, startWhere()), card, "The program");
     stop();
     reviewing = Object.assign(r, { request: text });
     renderReview(card, reviewing, { where: startWhere, onRun: runProgram, onChangeWords: () => { card.hidden = true; $("new-request").focus(); } });
@@ -901,6 +948,7 @@ function renderNowProgram(v) {
       .then((ok) => { if (ok) toast("The power will fail right after the next part is put down."); });
   };
   $("change-box").hidden = ["completed", "partial", "stopped", "failed"].includes(st);
+  setTimeout(() => { $("cell-hud").textContent = $("now-title").textContent; }, 0);
   if (st === "created") {
     setBadge("idle", "Ready");
     title("Ready to run the program", "Press Start.");
@@ -996,7 +1044,7 @@ async function writeRevision() {
   card.scrollIntoView({ behavior: "smooth", block: "start" });
   const where = () => ({ run_id: current });
   try {
-    const r = await api("POST", "/api/programs/write", { text, run_id: current });
+    const r = await followWriteJob({ text, run_id: current }, card, "A new program for: “" + text + "”");
     stop();
     revision = Object.assign(r, { request: text });
     renderReview(card, revision, {
@@ -1105,6 +1153,65 @@ function armLoop(now) {
 }
 requestAnimationFrame(armLoop);
 
+// ------------------------------------------------------------------ the robot cell in 3D
+
+let cell3d = false;
+let cellFor = null; // what the 3D view shows: "run:<id>" or "scenario:<id>"
+let cellBusy = false;
+let lastRehearsal = null;
+
+function mountCell() {
+  if (cell3d || !window.RevolveCell) return;
+  cell3d = window.RevolveCell.mount($("cell3d"));
+  $("cell-card").hidden = !cell3d;
+  $("workspace-card").hidden = cell3d;
+}
+window.addEventListener("revolve-cell-ready", () => { mountCell(); pollCell(); });
+
+async function pollCell() {
+  if (!cell3d || cellBusy) return;
+  const want = current ? "run:" + current : "scenario:" + $("scenario-select").value;
+  if (want !== cellFor) {
+    window.RevolveCell.reset();
+    cellFor = want;
+  } else if (!current) {
+    return; // a scenario's table does not change until a run starts
+  }
+  cellBusy = true;
+  try {
+    const path = current
+      ? "/api/runs/" + encodeURIComponent(current) + "/scene?since=" + window.RevolveCell.lastSeq()
+      : "/api/scenarios/" + encodeURIComponent($("scenario-select").value) + "/scene";
+    const sc = await api("GET", path);
+    if (want === cellFor) {
+      window.RevolveCell.update(sc);
+      renderSpeed(sc.speed);
+    }
+  } catch { /* the next poll retries */ }
+  finally { cellBusy = false; }
+}
+
+const SPEEDS = [1, 1.5, 3, 6];
+function renderSpeed(speed) {
+  const box = $("speed-buttons");
+  const live = !!current && view && ["running", "paused", "awaiting_human", "blocked", "created"].includes(view.state.status);
+  box.hidden = !live;
+  if (!live) return;
+  if (box.getAttribute("data-speed") === String(speed)) return;
+  box.setAttribute("data-speed", String(speed));
+  clear(box);
+  box.append(h("span", {}, "Speed:"));
+  for (const s of SPEEDS) {
+    box.append(h("button", { type: "button", class: "ghost" + (Math.abs(s - speed) < 0.01 ? " on" : ""), onclick: () => act("sim", { control: "speed", value: s }, true) }, s + "×"));
+  }
+  box.append(h("span", { class: "small" }, "real time"));
+}
+
+function previewRehearsal(r) {
+  lastRehearsal = r && r.motions && r.motions.length ? r.motions : null;
+  if (cell3d && lastRehearsal) window.RevolveCell.preview(lastRehearsal, 4);
+}
+
 // ------------------------------------------------------------------ technical view
 
 const CHIP_LABEL = { dispatch_recorded: "in flight", acknowledged: "unverified", outcome_unknown: "outcome unknown", retry_pending: "retry (same key)", succeeded: "verified", satisfied: "already true" };
@@ -1195,6 +1302,7 @@ function changeWords() {
 }
 
 function newRequest() {
+  $("cell-hud").textContent = "";
   current = null;
   view = null;
   $("run-select").value = "";
@@ -1289,7 +1397,7 @@ function wire() {
   $("btn-refresh").addEventListener("click", () => loadRuns());
   $("btn-reload").addEventListener("click", () => location.reload());
   $("tech-toggle").addEventListener("change", (e) => { $("tech").hidden = !e.target.checked; if (view) render(view); });
-  $("scenario-select").addEventListener("change", describeScenario);
+  $("scenario-select").addEventListener("change", () => { describeScenario(); if (!current) pollCell(); });
   $("show-all-scenarios").addEventListener("change", fillScenarioSelect);
   $("new-run").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1354,6 +1462,8 @@ function wire() {
 
 (async function main() {
   wire();
+  mountCell();
+  setInterval(pollCell, 250);
   const m = /run=([A-Za-z0-9_-]+)/.exec(location.hash);
   try { await loadScenarios(); await loadExamples(); await loadRuns(m ? m[1] : null); } catch (e) { toast("Server unavailable: " + e.message); }
   syncStartButton();

@@ -210,6 +210,9 @@ pub struct Rehearsal {
     pub end_state: Vec<Value>,
     /// Successful moves in order: {line, part, from, to}.
     pub moves: Vec<Value>,
+    /// Every motion segment the arm made in the twin (nominal 1x durations), for a
+    /// preview of the run.
+    pub motions: Vec<Value>,
     pub duration_ms: i64,
 }
 
@@ -274,7 +277,9 @@ pub fn rehearse(
         }
         let store = RunStore::open(&dir)?;
         let st = store.state()?;
-        let truth = SimWorld::open(&dir.join("world.db"))?.truth()?;
+        let twin = SimWorld::open(&dir.join("world.db"))?;
+        let truth = twin.truth()?;
+        let motions = twin.motion_log()?;
         let end_state = truth
             .objects
             .iter()
@@ -302,6 +307,7 @@ pub fn rehearse(
             questions,
             end_state,
             moves,
+            motions,
             duration_ms: now_ms() - t0,
         })
     })();
