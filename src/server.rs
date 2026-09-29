@@ -13,12 +13,12 @@
 
 use crate::harness::{self, Arm, PlannerChoice};
 use crate::inventory;
-use crate::model::{parse_restricted_request, GoalSpec};
+use crate::model::{GoalSpec, parse_restricted_request};
 use crate::scenario::{self, FaultSpec, Scenario};
 use crate::sim::SimWorld;
 use crate::store::*;
-use crate::util::{now_ms, Error, Result};
-use serde_json::{json, Value};
+use crate::util::{Error, Result, now_ms};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::SocketAddr;
@@ -42,7 +42,9 @@ struct Ctx {
 }
 
 pub fn check_bind(bind: &str) -> Result<SocketAddr> {
-    let addr: SocketAddr = bind.parse().map_err(|e| Error::new(format!("invalid --bind `{bind}`: {e}")))?;
+    let addr: SocketAddr = bind
+        .parse()
+        .map_err(|e| Error::new(format!("invalid --bind `{bind}`: {e}")))?;
     if !addr.ip().is_loopback() {
         crate::bail!(
             "refusing to bind {addr}: the v0 UI has no authentication, so it only listens on loopback. \
@@ -55,7 +57,8 @@ pub fn check_bind(bind: &str) -> Result<SocketAddr> {
 pub fn serve(bind: &str, state_dir: &Path, scenarios_dir: &Path, step_delay_ms: u64) -> Result<()> {
     let addr = check_bind(bind)?;
     std::fs::create_dir_all(state_dir)?;
-    let server = Server::http(addr).map_err(|e| Error::new(format!("cannot listen on {addr}: {e}")))?;
+    let server =
+        Server::http(addr).map_err(|e| Error::new(format!("cannot listen on {addr}: {e}")))?;
     let ctx = Arc::new(Ctx {
         state_dir: state_dir.to_path_buf(),
         scenarios_dir: scenarios_dir.to_path_buf(),
@@ -95,15 +98,24 @@ fn json_resp(req: Request, status: u16, v: &Value) {
 }
 
 fn get_header<'a>(req: &'a Request, name: &str) -> Option<&'a str> {
-    req.headers().iter().find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name)).map(|h| h.value.as_str())
+    req.headers()
+        .iter()
+        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+        .map(|h| h.value.as_str())
 }
 
 /// Boundary check for mutating requests. Exposed for tests.
-pub fn mutation_allowed(expected_host: &str, host: Option<&str>, origin: Option<&str>, client: Option<&str>) -> std::result::Result<(), &'static str> {
+pub fn mutation_allowed(
+    expected_host: &str,
+    host: Option<&str>,
+    origin: Option<&str>,
+    client: Option<&str>,
+) -> std::result::Result<(), &'static str> {
     if client != Some("ui") {
         return Err("missing X-Revolve-Client header");
     }
-    let host_ok = |h: &str| h == expected_host || h == expected_host.replace("127.0.0.1", "localhost");
+    let host_ok =
+        |h: &str| h == expected_host || h == expected_host.replace("127.0.0.1", "localhost");
     match host {
         Some(h) if host_ok(h) => {}
         _ => return Err("unexpected Host header"),
@@ -123,22 +135,38 @@ fn handle(ctx: &Ctx, mut req: Request) {
     let method = req.method().clone();
     if method == Method::Get {
         match path.as_str() {
-            "/" | "/index.html" => return respond(req, 200, "text/html; charset=utf-8", INDEX_HTML.into()),
+            "/" | "/index.html" => {
+                return respond(req, 200, "text/html; charset=utf-8", INDEX_HTML.into());
+            }
             "/app.js" => return respond(req, 200, "text/javascript; charset=utf-8", APP_JS.into()),
             "/style.css" => return respond(req, 200, "text/css; charset=utf-8", STYLE_CSS.into()),
             _ => {}
         }
     }
-    if method == Method::Post {
-        if let Err(why) = mutation_allowed(&ctx.host, get_header(&req, "Host"), get_header(&req, "Origin"), get_header(&req, "X-Revolve-Client")) {
-            return json_resp(req, 403, &json!({"error": why}));
-        }
+    if method == Method::Post
+        && let Err(why) = mutation_allowed(
+            &ctx.host,
+            get_header(&req, "Host"),
+            get_header(&req, "Origin"),
+            get_header(&req, "X-Revolve-Client"),
+        )
+    {
+        return json_resp(req, 403, &json!({"error": why}));
     }
     let mut body = String::new();
-    if method == Method::Post {
-        if req.as_reader().take(MAX_BODY + 1).read_to_string(&mut body).is_err() || body.len() as u64 > MAX_BODY {
-            return json_resp(req, 413, &json!({"error": "request body too large or not UTF-8"}));
-        }
+    if method == Method::Post
+        && (req
+            .as_reader()
+            .take(MAX_BODY + 1)
+            .read_to_string(&mut body)
+            .is_err()
+            || body.len() as u64 > MAX_BODY)
+    {
+        return json_resp(
+            req,
+            413,
+            &json!({"error": "request body too large or not UTF-8"}),
+        );
     }
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     let result = match (method.clone(), parts.as_slice()) {
@@ -171,9 +199,15 @@ fn list_scenarios(ctx: &Ctx) -> Result<Value> {
 fn list_runs(ctx: &Ctx) -> Result<Value> {
     let mut out = vec![];
     for id in harness::list_runs(&ctx.state_dir).into_iter().take(40) {
-        let Ok(dir) = harness::run_dir(&ctx.state_dir, &id) else { continue };
-        let Ok(s) = RunStore::open(&dir) else { continue };
-        let (Ok(st), Ok(meta)) = (s.state(), s.meta()) else { continue };
+        let Ok(dir) = harness::run_dir(&ctx.state_dir, &id) else {
+            continue;
+        };
+        let Ok(s) = RunStore::open(&dir) else {
+            continue;
+        };
+        let (Ok(st), Ok(meta)) = (s.state(), s.meta()) else {
+            continue;
+        };
         out.push(json!({"run_id": id, "status": st.status, "arm": meta.arm, "planner": meta.planner, "scenario": meta.scenario_id, "created_at_ms": meta.created_at_ms}));
     }
     Ok(json!(out))
@@ -188,30 +222,44 @@ fn create(ctx: &Ctx, body: &str) -> Result<Value> {
     if let Some(text) = v["request"].as_str().filter(|t| !t.trim().is_empty()) {
         sc.goal = parse_restricted_request(text)?;
     } else if let Some(g) = v.get("goal").filter(|g| !g.is_null()) {
-        let g: GoalSpec = serde_json::from_value(g.clone()).map_err(|e| Error::new(format!("goal: {e}")))?;
+        let g: GoalSpec =
+            serde_json::from_value(g.clone()).map_err(|e| Error::new(format!("goal: {e}")))?;
         g.validate()?;
         sc.goal = g;
     }
-    let human = if v["scripted_human"].as_bool().unwrap_or(false) { "scripted" } else { "interactive" };
+    let human = if v["scripted_human"].as_bool().unwrap_or(false) {
+        "scripted"
+    } else {
+        "interactive"
+    };
     if v["planner"].as_str().unwrap_or("scripted") != "scripted" {
-        crate::bail!("the UI starts scripted-planner runs; live runs require an explicit --budget on the CLI");
+        crate::bail!(
+            "the UI starts scripted-planner runs; live runs require an explicit --budget on the CLI"
+        );
     }
-    let (run_id, _) = harness::create_run(&ctx.state_dir, &sc, arm, &PlannerChoice::Scripted, human)?;
+    let (run_id, _) =
+        harness::create_run(&ctx.state_dir, &sc, arm, &PlannerChoice::Scripted, human)?;
     Ok(json!({"run_id": run_id}))
 }
 
 fn spawn_executor(ctx: &Ctx, run_id: &str) -> Result<()> {
     let dir = harness::run_dir(&ctx.state_dir, run_id)?;
-    let mut children = ctx.children.lock().map_err(|_| Error::new("lock poisoned"))?;
-    if let Some(c) = children.get_mut(run_id) {
-        if c.try_wait().ok().flatten().is_none() {
-            crate::bail!("an executor is already running for this run");
-        }
+    let mut children = ctx
+        .children
+        .lock()
+        .map_err(|_| Error::new("lock poisoned"))?;
+    if let Some(c) = children.get_mut(run_id)
+        && c.try_wait().ok().flatten().is_none()
+    {
+        crate::bail!("an executor is already running for this run");
     }
     if OwnerLock::is_held(&dir) {
         crate::bail!("another executor owns this run");
     }
-    let log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("executor.log"))?;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("executor.log"))?;
     let child = Command::new(&ctx.exe)
         .arg("resume")
         .arg("--run")
@@ -229,19 +277,22 @@ fn spawn_executor(ctx: &Ctx, run_id: &str) -> Result<()> {
 
 fn executor_state(ctx: &Ctx, run_id: &str, dir: &Path) -> Value {
     let mut exit = Value::Null;
-    if let Ok(mut children) = ctx.children.lock() {
-        if let Some(c) = children.get_mut(run_id) {
-            if let Ok(Some(st)) = c.try_wait() {
-                exit = json!(st.code());
-            }
-        }
+    if let Ok(mut children) = ctx.children.lock()
+        && let Some(c) = children.get_mut(run_id)
+        && let Ok(Some(st)) = c.try_wait()
+    {
+        exit = json!(st.code());
     }
     json!({"active": OwnerLock::is_held(dir), "last_exit_code": exit, "simulated_crash_code": crate::util::SIMULATED_CRASH_EXIT_CODE})
 }
 
 fn act(ctx: &Ctx, run_id: &str, action: &str, body: &str) -> Result<Value> {
     let dir = harness::run_dir(&ctx.state_dir, run_id)?;
-    let v: Value = if body.trim().is_empty() { json!({}) } else { serde_json::from_str(body)? };
+    let v: Value = if body.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(body)?
+    };
     match action {
         "start" | "resume" => {
             spawn_executor(ctx, run_id)?;
@@ -249,7 +300,9 @@ fn act(ctx: &Ctx, run_id: &str, action: &str, body: &str) -> Result<Value> {
         }
         "pause" => {
             RunStore::open(&dir)?.request_control("pause")?;
-            Ok(json!({"ok": true, "message": "pause requested; in-flight outcomes will be established first"}))
+            Ok(
+                json!({"ok": true, "message": "pause requested; in-flight outcomes will be established first"}),
+            )
         }
         "cancel" => {
             RunStore::open(&dir)?.request_control("cancel")?;
@@ -260,29 +313,35 @@ fn act(ctx: &Ctx, run_id: &str, action: &str, body: &str) -> Result<Value> {
         }
         "correct" => {
             let mut store = RunStore::open(&dir)?;
-            let goal: GoalSpec = if let Some(t) = v["request"].as_str().filter(|t| !t.trim().is_empty()) {
-                parse_restricted_request(t)?
-            } else {
-                let mut g: GoalSpec = serde_json::from_value(v["goal"].clone()).map_err(|e| Error::new(format!("goal: {e}")))?;
-                // Decisions already made (substitutions, rework) carry over unless the form changes them.
-                let (_, cur) = store.current_goal()?;
-                if g.approved_substitutions.is_empty() {
-                    g.approved_substitutions = cur.approved_substitutions;
-                }
-                if g.declined_substitutions.is_empty() {
-                    g.declined_substitutions = cur.declined_substitutions;
-                }
-                if g.rework_permitted.is_none() {
-                    g.rework_permitted = cur.rework_permitted;
-                }
-                g
-            };
+            let goal: GoalSpec =
+                if let Some(t) = v["request"].as_str().filter(|t| !t.trim().is_empty()) {
+                    parse_restricted_request(t)?
+                } else {
+                    let mut g: GoalSpec = serde_json::from_value(v["goal"].clone())
+                        .map_err(|e| Error::new(format!("goal: {e}")))?;
+                    // Decisions already made (substitutions, rework) carry over unless the form changes them.
+                    let (_, cur) = store.current_goal()?;
+                    if g.approved_substitutions.is_empty() {
+                        g.approved_substitutions = cur.approved_substitutions;
+                    }
+                    if g.declined_substitutions.is_empty() {
+                        g.declined_substitutions = cur.declined_substitutions;
+                    }
+                    if g.rework_permitted.is_none() {
+                        g.rework_permitted = cur.rework_permitted;
+                    }
+                    g
+                };
             let rev = store.submit_goal_revision(&goal, "human (ui)", "correction from the UI")?;
             Ok(json!({"ok": true, "message": format!("goal revision {rev} recorded")}))
         }
         "answer" => {
-            let q = v["question_id"].as_i64().ok_or_else(|| Error::new("question_id required"))?;
-            let choice = v["choice"].as_str().ok_or_else(|| Error::new("choice required"))?;
+            let q = v["question_id"]
+                .as_i64()
+                .ok_or_else(|| Error::new("question_id required"))?;
+            let choice = v["choice"]
+                .as_str()
+                .ok_or_else(|| Error::new("choice required"))?;
             let out = RunStore::open(&dir)?.answer(q, choice, "human (ui)")?;
             Ok(json!({"ok": true, "message": out}))
         }
@@ -294,19 +353,25 @@ fn act(ctx: &Ctx, run_id: &str, action: &str, body: &str) -> Result<Value> {
                 "planner_offline" => w.set_planner_offline(true)?,
                 "planner_online" => w.set_planner_offline(false)?,
                 "tray_unavailable" | "tray_available" => {
-                    let loc = v["location_id"].as_str().ok_or_else(|| Error::new("location_id required"))?;
+                    let loc = v["location_id"]
+                        .as_str()
+                        .ok_or_else(|| Error::new("location_id required"))?;
                     if !loc.starts_with("tray-") {
                         crate::bail!("only trays can be toggled from the UI");
                     }
                     w.set_location_available(loc, what == "tray_available")?;
                 }
                 "arm_fault" => {
-                    let f: FaultSpec = serde_json::from_value(v["fault"].clone()).map_err(|e| Error::new(format!("fault: {e}")))?;
+                    let f: FaultSpec = serde_json::from_value(v["fault"].clone())
+                        .map_err(|e| Error::new(format!("fault: {e}")))?;
                     w.arm_fault(&f)?;
                 }
                 other => crate::bail!("unknown simulation control `{other}`"),
             }
-            w.log_harness("human_intervention", &json!({"type": "sim_control", "control": what, "via": "ui"}))?;
+            w.log_harness(
+                "human_intervention",
+                &json!({"type": "sim_control", "control": what, "via": "ui"}),
+            )?;
             Ok(json!({"ok": true, "message": format!("simulation control applied: {what}")}))
         }
         _ => Err(Error::new("not found")),
@@ -322,7 +387,13 @@ fn run_view(ctx: &Ctx, run_id: &str) -> Result<Value> {
     let truth = world.truth()?;
     let actions = store.actions()?;
     let plans = store.plans()?;
-    let active = st.active_plan_seq.or_else(|| plans.iter().rev().find(|p| p.status != "rejected" && p.status != "stale").map(|p| p.plan_seq));
+    let active = st.active_plan_seq.or_else(|| {
+        plans
+            .iter()
+            .rev()
+            .find(|p| p.status != "rejected" && p.status != "stale")
+            .map(|p| p.plan_seq)
+    });
     let steps: Vec<Value> = actions
         .iter()
         .filter(|a| Some(a.plan_seq) == Some(active) || a.origin != "plan")
@@ -365,7 +436,12 @@ fn run_view(ctx: &Ctx, run_id: &str) -> Result<Value> {
             json!({"location_id": l.location_id, "loc_type": l.loc_type, "available": l.available, "objects": objs})
         })
         .collect();
-    let removed: Vec<String> = truth.objects.iter().filter(|o| o.location_id == crate::sim::OUTSIDE).map(|o| o.object_id.clone()).collect();
+    let removed: Vec<String> = truth
+        .objects
+        .iter()
+        .filter(|o| o.location_id == crate::sim::OUTSIDE)
+        .map(|o| o.object_id.clone())
+        .collect();
     let withheld: Vec<String> = if truth.blackout {
         world.observe_withheld()
     } else {
@@ -391,4 +467,44 @@ fn run_view(ctx: &Ctx, run_id: &str) -> Result<Value> {
                             "effect_counts": world.effect_counts()?, "faults": truth.faults},
         "now_ms": now_ms(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_loopback_binds_are_accepted() {
+        assert!(check_bind("127.0.0.1:8080").is_ok());
+        assert!(check_bind("[::1]:8080").is_ok());
+        assert!(check_bind("0.0.0.0:8080").is_err());
+        assert!(check_bind("192.168.1.20:8080").is_err());
+    }
+
+    #[test]
+    fn mutations_need_the_client_header_and_matching_host_and_origin() {
+        let host = "127.0.0.1:8080";
+        assert!(mutation_allowed(host, Some(host), None, Some("ui")).is_ok());
+        assert!(
+            mutation_allowed(
+                host,
+                Some("localhost:8080"),
+                Some("http://localhost:8080"),
+                Some("ui")
+            )
+            .is_ok()
+        );
+        assert!(
+            mutation_allowed(host, Some(host), None, None).is_err(),
+            "missing custom header"
+        );
+        assert!(
+            mutation_allowed(host, Some("evil.example:8080"), None, Some("ui")).is_err(),
+            "DNS rebinding"
+        );
+        assert!(
+            mutation_allowed(host, Some(host), Some("http://evil.example"), Some("ui")).is_err(),
+            "cross-origin"
+        );
+    }
 }

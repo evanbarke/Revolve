@@ -329,16 +329,31 @@ pub fn evaluate_run(dir: &Path) -> Result<Verdict> {
             Some(v.outcome_matches_expectation && clean && v.inventory_correct);
     }
     if sc.expect.outcome == "partial" {
-        let reported_missing = report
+        // The run must say why kits are incomplete: missing parts, a non-conforming tray
+        // (extra parts; rework declined) or an unavailable tray — or, for an agent,
+        // a message that says what is missing / not completable.
+        let explained = report
             .get("missing_to_finish")
             .and_then(Value::as_object)
             .is_some_and(|m| !m.is_empty())
             || report
+                .get("trays")
+                .and_then(Value::as_array)
+                .is_some_and(|ts| {
+                    ts.iter().any(|t| {
+                        t["excess"].as_object().is_some_and(|e| !e.is_empty())
+                            || (t["available"] == false
+                                && t["objects"].as_array().is_some_and(|o| !o.is_empty()))
+                    })
+                })
+            || report
                 .get("message")
                 .and_then(Value::as_str)
-                .is_some_and(|m| m.contains("missing"));
+                .is_some_and(|m| m.contains("missing") || m.contains("not completable"));
+        let reported_missing = explained;
         if !reported_missing {
-            v.notes.push("did not report what is missing".into());
+            v.notes
+                .push("did not explain why kits are incomplete".into());
         }
         v.infeasible_handled =
             Some(v.outcome_matches_expectation && clean && v.inventory_correct && reported_missing);

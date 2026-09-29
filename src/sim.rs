@@ -1017,7 +1017,9 @@ impl SimWorld {
 
     /// Applied-effect counters per capability (the basis of event-triggered faults).
     pub fn effect_counts(&self) -> Result<std::collections::BTreeMap<String, i64>> {
-        let mut stmt = self.conn.prepare("SELECT capability, applied FROM effect_counters")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT capability, applied FROM effect_counters")?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
             .collect::<std::result::Result<std::collections::BTreeMap<_, _>, _>>()?;

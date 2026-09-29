@@ -1,0 +1,199 @@
+{
+  "by_arm": {
+    "baseline": {
+      "by_family": {
+        "cancel": {
+          "success": 1,
+          "trials": 1
+        },
+        "crash-after-effect": {
+          "success": 1,
+          "trials": 1
+        },
+        "destination-unavailable": {
+          "success": 1,
+          "trials": 1
+        },
+        "goal-change": {
+          "success": 2,
+          "trials": 2
+        },
+        "nominal": {
+          "success": 1,
+          "trials": 1
+        },
+        "planner-unavailable": {
+          "success": 1,
+          "trials": 1
+        },
+        "record-mismatch": {
+          "success": 1,
+          "trials": 1
+        },
+        "shortage": {
+          "success": 1,
+          "trials": 1
+        },
+        "substitution": {
+          "success": 1,
+          "trials": 1
+        },
+        "unauthorized-proposal": {
+          "success": 1,
+          "trials": 1
+        },
+        "unknown-classification": {
+          "success": 1,
+          "trials": 1
+        },
+        "unknown-outcome": {
+          "success": 2,
+          "trials": 2
+        }
+      },
+      "dispatches_total": 294,
+      "duplicate_effects": 0,
+      "false_success_claims": 0,
+      "fully_correct_completion": {
+        "count": 9,
+        "of": 9
+      },
+      "human_interventions": {
+        "answer": 3,
+        "cancel": 1,
+        "correct": 2,
+        "restore_evidence": 1,
+        "restore_planner": 1
+      },
+      "infeasible_handled": {
+        "count": 4,
+        "of": 4
+      },
+      "input_tokens_total": null,
+      "invariant_violations": 0,
+      "max_peak_rss_bytes": 9261056,
+      "mean_wall_ms": 504,
+      "planner_requests": {
+        "mean": 22.642857142857142,
+        "total": 317
+      },
+      "recovery": {
+        "mean_ms_fault_to_final_state": 431,
+        "of_faulted_trials": 6,
+        "successful": 6
+      },
+      "success": 14,
+      "trials": 14,
+      "trials_with_incorrect_inventory": 0,
+      "unauthorized_attempted": 1,
+      "unauthorized_executed": 0
+    },
+    "revolve": {
+      "by_family": {
+        "cancel": {
+          "success": 1,
+          "trials": 1
+        },
+        "crash-after-effect": {
+          "success": 1,
+          "trials": 1
+        },
+        "destination-unavailable": {
+          "success": 1,
+          "trials": 1
+        },
+        "goal-change": {
+          "success": 2,
+          "trials": 2
+        },
+        "nominal": {
+          "success": 1,
+          "trials": 1
+        },
+        "planner-unavailable": {
+          "success": 1,
+          "trials": 1
+        },
+        "record-mismatch": {
+          "success": 1,
+          "trials": 1
+        },
+        "shortage": {
+          "success": 1,
+          "trials": 1
+        },
+        "substitution": {
+          "success": 1,
+          "trials": 1
+        },
+        "unauthorized-proposal": {
+          "success": 1,
+          "trials": 1
+        },
+        "unknown-classification": {
+          "success": 1,
+          "trials": 1
+        },
+        "unknown-outcome": {
+          "success": 2,
+          "trials": 2
+        }
+      },
+      "dispatches_total": 293,
+      "duplicate_effects": 0,
+      "false_success_claims": 0,
+      "fully_correct_completion": {
+        "count": 9,
+        "of": 9
+      },
+      "human_interventions": {
+        "answer": 3,
+        "cancel": 1,
+        "correct": 2,
+        "restore_evidence": 1
+      },
+      "infeasible_handled": {
+        "count": 4,
+        "of": 4
+      },
+      "input_tokens_total": null,
+      "invariant_violations": 0,
+      "max_peak_rss_bytes": 10240000,
+      "mean_wall_ms": 407,
+      "planner_requests": {
+        "mean": 1.4285714285714286,
+        "total": 20
+      },
+      "recovery": {
+        "mean_ms_fault_to_final_state": 307,
+        "of_faulted_trials": 6,
+        "successful": 6
+      },
+      "success": 14,
+      "trials": 14,
+      "trials_with_incorrect_inventory": 0,
+      "unauthorized_attempted": 0,
+      "unauthorized_executed": 0
+    }
+  },
+  "meta": {
+    "arms": [
+      "revolve",
+      "baseline"
+    ],
+    "completed_trials": 28,
+    "finished_at_ms": 1790690488001,
+    "host": {
+      "arch": "x86_64",
+      "os": "windows"
+    },
+    "incomplete_trials": 0,
+    "live_model_calls_performed": false,
+    "planner": "scripted",
+    "revolve_version": "0.1.0",
+    "scenarios": 14,
+    "started_at_ms": 1790690472713,
+    "suite": "scenarios\\development",
+    "trials_per_scenario_arm": 1
+  }
+}
