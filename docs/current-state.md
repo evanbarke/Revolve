@@ -2,6 +2,11 @@
 
 _Last updated: 2026-09-29, first build session (after vision step 2: the AI writes programs; see `docs/programs.md`)._
 
+**Now in real time and 3D:** the simulator moves a jointed arm with real limits
+and speeds; the page shows the cell live in 3D (drag/pinch), the AI's program
+streams in as it is written, and the rehearsal plays as a ghost arm
+(`docs/programs.md`, "The robot cell"). LAN tablets: `revolve serve --lan`.
+
 **To try it:** `revolve serve`, open http://127.0.0.1:8080, pick "A messy table",
 type what you want and press **Write the program** (or pick an example, no AI).
 Then read what was checked and rehearsed and press **Run it for real**. While it

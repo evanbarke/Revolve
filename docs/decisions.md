@@ -128,6 +128,23 @@ the claims shown to the person.
 - **Changing a running program:** it pauses first. Live testing showed that
   otherwise the old program keeps moving while the new one is written.
 
+**D18 — The simulator becomes a real-time robot controller.** The owner's
+feedback was that the demo was slow and limited, and that it needs to emulate a
+real world and run in real time. Motion now lives in the simulator, not the
+browser:
+- it uses real geometry, kinematics, and joint and speed limits;
+- every segment is logged with wall-clock timing;
+- a controller finishes a commanded segment even if the software dies, which
+  matches the existing crash semantics;
+- the browser only draws the logged motion.
+
+three.js is bundled locally (MIT, integrity-checked from npm), so the page works
+offline and on a LAN tablet. Speed 0 keeps tests and benchmarks instant and
+unchanged. Program writing streams (Messages API `stream: true`, assembled into
+the same response shape) through a background job the page polls. This was
+chosen because tiny_http buffers chunked responses, which would defeat
+server-sent events.
+
 **D13 — Restricted grammar, not NLU, in scripted mode.** `parse-request` and
 the UI accept only the kit family's phrasing and refuse anything else rather
 than guessing.

@@ -786,6 +786,7 @@ function renderWriting(card, st, title, t0) {
     for (const p of st.problems) box.append(h("p", { class: "diag" }, p));
     card.append(box);
   }
+  if (st.phase === "writing" && !st.explanation && !st.program) card.append(h("p", { class: "muted small" }, "It thinks first (usually 5–15 seconds), then the program appears here as it is written."));
   if (st.explanation) card.append(h("p", { class: "explain" }, st.explanation));
   if (st.program) {
     const pre = codeView(st.program);

@@ -40,6 +40,38 @@ revolve script check --file examples/programs/trays-by-color.rvs --scenario mess
 revolve script run   --file examples/programs/sort-to-bins.rvs  --scenario messy-table-power-cut
 ```
 
+## The robot cell (real time, 3D)
+
+The simulator is the controller of a physical cell (`src/cell.rs`,
+`src/sim/motion.rs`):
+- **Layout:** bins on an arc to the left of the arm, trays 1–4 on an arc to the
+  right, trays 5–6 on an inner arc, and the pile in front. All sizes are in
+  metres, and the places are checked not to overlap.
+- **The arm:** 4 joints plus a gripper, with inverse kinematics, joint limits
+  and joint speed limits. It travels at a safe height, and each path is checked
+  so it neither dips into walls or parts nor passes too close to the base.
+- **Pick:** approach, descend, close, then the grip is committed as the effect,
+  then lift.
+- **Place:** carry to a free slot, descend, then the release is committed as the
+  effect, then open and lift.
+- The effect transaction is unchanged, so receipts, faults and crash semantics
+  are the same as before.
+- A command the arm cannot reach is refused before anything moves.
+- Every segment is logged with its wall-clock start and duration. At 1× a
+  pick-and-place takes about 4 s. The web app runs at 1.5× by default,
+  adjustable from 1× to 6×. Speed 0 (instant) is used by tests and benchmarks,
+  whose verdicts are unchanged (90/90 identical).
+
+The page draws the cell with three.js (r186, MIT, bundled in `web/vendor/three`).
+It poses the arm with the simulator's kinematics and interpolates the logged
+segments against the server clock, so what you see is the simulated motion as
+it happens. The rehearsal is replayed as a see-through ghost arm. The AI's
+program streams onto the page as it is written.
+
+Verified in real time: a power cut stopped the arm inside a tray. On Continue,
+the unrecorded placement was reconciled rather than repeated, and the run
+completed with its checks held.
+
 ## Why the language looks like Python
 
 Models already write Python well, so a Python-shaped language keeps the
