@@ -33,6 +33,17 @@ const APP_JS: &str = include_str!("../web/app.js");
 const STYLE_CSS: &str = include_str!("../web/style.css");
 const MAX_BODY: u64 = 64 * 1024;
 
+/// Identifies the page this server serves. Every response carries it, so a page
+/// left open across a rebuild can tell it is out of date instead of misreading
+/// newer data.
+fn build_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        crate::util::sha256_hex([INDEX_HTML, APP_JS, STYLE_CSS].concat().as_bytes())[..12]
+            .to_string()
+    })
+}
+
 struct Ctx {
     state_dir: PathBuf,
     scenarios_dir: PathBuf,
@@ -85,6 +96,7 @@ fn respond(req: Request, status: u16, content_type: &str, body: String) {
         .with_header(header("Cache-Control", "no-store"))
         .with_header(header("X-Content-Type-Options", "nosniff"))
         .with_header(header("Referrer-Policy", "no-referrer"))
+        .with_header(header("X-Revolve-Build", build_id()))
         .with_header(header(
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
@@ -148,7 +160,12 @@ fn handle(ctx: &Ctx, mut req: Request) {
     if method == Method::Get {
         match path.as_str() {
             "/" | "/index.html" => {
-                return respond(req, 200, "text/html; charset=utf-8", INDEX_HTML.into());
+                return respond(
+                    req,
+                    200,
+                    "text/html; charset=utf-8",
+                    INDEX_HTML.replace("{{BUILD}}", build_id()),
+                );
             }
             "/app.js" => return respond(req, 200, "text/javascript; charset=utf-8", APP_JS.into()),
             "/style.css" => return respond(req, 200, "text/css; charset=utf-8", STYLE_CSS.into()),
@@ -574,6 +591,16 @@ mod tests {
         ] {
             assert!(!is_loopback_authority(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn served_page_carries_its_build() {
+        assert!(
+            INDEX_HTML.contains("{{BUILD}}"),
+            "page template must have the build placeholder"
+        );
+        assert_eq!(build_id().len(), 12);
+        assert!(APP_JS.contains("revolve-build") && APP_JS.contains("X-Revolve-Build"));
     }
 
     #[test]

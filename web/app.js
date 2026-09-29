@@ -46,10 +46,19 @@ async function api(method, path, body) {
     opts.body = JSON.stringify(body || {});
   }
   const r = await fetch(path, opts);
+  noteBuild(r.headers.get("X-Revolve-Build"));
   let j;
   try { j = await r.json(); } catch { j = { error: "HTTP " + r.status }; }
   if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
   return j;
+}
+
+// The server labels every response with the build of the page it serves. If that
+// changes while this page is open, this page is out of date: say so rather than
+// misread newer data.
+const pageBuild = (document.querySelector('meta[name="revolve-build"]') || {}).content || null;
+function noteBuild(b) {
+  if (b && pageBuild && b !== pageBuild) $("stale-banner").hidden = false;
 }
 
 let toastTimer = null;
@@ -689,6 +698,7 @@ function wire() {
     poll();
   });
   $("btn-refresh").addEventListener("click", () => loadRuns());
+  $("btn-reload").addEventListener("click", () => location.reload());
   $("tech-toggle").addEventListener("change", (e) => { $("tech").hidden = !e.target.checked; if (view) render(view); });
   $("scenario-select").addEventListener("change", describeScenario);
   $("show-all-scenarios").addEventListener("change", fillScenarioSelect);
@@ -705,7 +715,9 @@ function wire() {
     try {
       const r = await api("POST", "/api/interpret", { text });
       const cost = r.cost_usd_estimate != null ? " · cost about $" + Number(r.cost_usd_estimate).toFixed(3) : "";
-      if (r.understood && r.goal) {
+      // Never offer to start a request with a kit that has no parts.
+      const usable = r.understood && r.goal && kitSpecs(r.goal).length > 0 && kitSpecs(r.goal).every((k) => sizeOf(k.components) > 0);
+      if (usable) {
         $("interp-title").textContent = "I understood: " + goalSentence(r.goal) + ".";
         $("interp-detail").textContent = (r.assumptions ? "Assumed: " + r.assumptions + " " : "") + (r.not_supported ? "Not possible here: " + r.not_supported + " " : "") + "(read by " + r.by + cost + ")";
         $("interp-actions").append(

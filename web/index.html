@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="revolve-build" content="{{BUILD}}">
 <title>Revolve Workspace</title>
 <link rel="stylesheet" href="/style.css">
 </head>
@@ -18,6 +19,10 @@
     <label class="check inline"><input type="checkbox" id="tech-toggle"> Technical details</label>
   </div>
 </header>
+
+<div id="stale-banner" class="stale" hidden role="alert">
+  This app was updated since you opened this page. <button type="button" id="btn-reload">Reload the page</button>
+</div>
 
 <main class="simple">
   <!-- Start a run -->
