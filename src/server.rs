@@ -484,6 +484,27 @@ fn program_write(ctx: &Ctx, body: &str) -> Result<Value> {
     if text.is_empty() || text.len() > 800 {
         crate::bail!("say what you want in a few sentences (up to 800 characters)");
     }
+    // Changing a running program: pause it first, so nothing new moves while the
+    // person decides and the new program is written and rehearsed for exactly the
+    // table it will get. The move in progress finishes and is checked.
+    let mut paused = false;
+    if let Some(run) = v["run_id"].as_str().filter(|r| !r.is_empty()) {
+        let dir = harness::run_dir(&ctx.state_dir, run)?;
+        let mut store = RunStore::open(&dir)?;
+        let st = store.state()?;
+        if is_terminal(&st.status) {
+            crate::bail!("this run has finished; start a new request instead");
+        }
+        if st.control == "run" {
+            store.request_control("pause")?;
+            paused = true;
+        }
+        drop(store);
+        let t0 = std::time::Instant::now();
+        while OwnerLock::is_held(&dir) && t0.elapsed().as_secs() < 15 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
     let t = table_source(ctx, &v)?;
     let cfg = LiveConfig::load(Path::new(LIVE_CONFIG)).map_err(|_| {
         Error::new("Writing programs from your words needs the AI (config/planner.json and an API key). You can still run the examples.")
@@ -524,6 +545,7 @@ fn program_write(ctx: &Ctx, body: &str) -> Result<Value> {
         }
         let w = r.map_err(|e| Error::new(format!("The AI could not write a program ({e}).")))?;
         if !w.understood && w.source.trim().is_empty() {
+            attempts.push(json!({"accepted": false, "understood": false}));
             last = Some((w, None));
             break;
         }
@@ -590,6 +612,7 @@ fn program_write(ctx: &Ctx, body: &str) -> Result<Value> {
         "rehearsal": rehearsal,
         "native_target": format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
         "by": format!("AI ({model})"),
+        "paused_run": paused,
         "seconds": (seconds * 10.0).round() / 10.0,
         "usage": {"input_tokens": tin, "output_tokens": tout},
         "cost_usd_estimate": cost,

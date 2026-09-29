@@ -992,7 +992,7 @@ async function writeRevision() {
   const text = $("change-text").value.trim();
   if (!text || !current) return toast("Say what should change.");
   const card = $("revision-card");
-  const stop = writingState(card, "The AI is writing a new program from the table as it is now");
+  const stop = writingState(card, "Paused. The AI is writing a new program from the table as it is now");
   card.scrollIntoView({ behavior: "smooth", block: "start" });
   const where = () => ({ run_id: current });
   try {
@@ -1008,12 +1008,12 @@ async function writeRevision() {
         if (ok) { card.hidden = true; $("change-text").value = ""; }
       },
       changeLabel: "Keep the current program",
-      onChangeWords: () => { card.hidden = true; },
+      onChangeWords: async () => { card.hidden = true; if (r.paused_run) await act("start", {}, true); },
     });
   } catch (e) {
     stop();
     clear(card);
-    card.append(h("p", { class: "diag" }, e.message), h("div", { class: "buttons" }, actionButton("Close", () => { card.hidden = true; }, "ghost")));
+    card.append(h("p", { class: "diag" }, e.message), h("div", { class: "buttons" }, actionButton("Close and continue", async () => { card.hidden = true; if (view && view.state.status === "paused") await act("start", {}, true); }, "ghost")));
   }
 }
 
