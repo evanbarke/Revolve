@@ -28,7 +28,13 @@ a planner request or an adapter call.
    record + ledger rows + reservation update together. The action's status is a
    separate write, so the same status-lookup recovery applies.
 5. **Goal correction** (one `BEGIN IMMEDIATE`): new revision + current pointer +
-   obsolete open questions + event.
+   obsolete open questions + event. Answering a substitution/rework question
+   commits the answer and the resulting revision in the same transaction,
+   against the goal as it is at that moment.
+6. **Terminal transition** (`finish_run`, one `BEGIN IMMEDIATE`): the final
+   status and report are written only if the goal revision and control flag are
+   still the ones the executor finished against; otherwise nothing is written
+   and the loop handles the correction, pause or cancel.
 
 Steps 2 and 3 are deliberately separate so a crash can leave an effect that the
 executor has not recorded. That gap is what the crash tests exercise.
@@ -60,16 +66,25 @@ after a timeout:
      (if observation is withheld: `acknowledged`, run blocked until verifiable);
    - rejected → `failed` (no effect);
    - not found → no effect under this key → `retry_pending` with the **same key**
-     if the contract has an idempotency key and attempts remain (the adapter
-     guarantees at most one effect per key), otherwise `failed`, or blocked if the
-     step says `on_unknown_outcome: block`.
+     if the action is still part of the active plan, the contract has an
+     idempotency key and attempts remain (the adapter guarantees at most one
+     effect per key); otherwise `failed` (the key is retired only on this
+     confirmed status); or blocked if the step says `on_unknown_outcome: block`.
 2. **Status unavailable** → observe. Postconditions hold → `succeeded`
    (attributed by observation). Effect clearly absent and same-key retry is safe
    → `retry_pending`. Otherwise → remains `outcome_unknown` and the run is
    **blocked**, with the reason stating what evidence is missing.
 
-Recovery never resets the world, never marks in-flight work failed wholesale,
-and never replays an effect without establishing its outcome.
+Effects are verified only against observable conditions (a goal revision is
+not an effect). When a plan is superseded, its pending same-key retries return
+to `outcome_unknown` and are settled by a status lookup before their key can be
+retired. Runtime bookkeeping actions left unsettled by a crash are reconciled
+the same way. Recovery never resets the world, never marks in-flight work
+failed wholesale, and never replays an effect without establishing its outcome.
+
+Loop order on every iteration: reconcile → cancel → pause → budgets → questions
+→ goal revision → plan → next step. Budget exhaustion therefore never skips
+reconciliation, and a cancel always ends as `stopped`.
 
 ## Operation identity across plans and goal revisions
 
@@ -120,7 +135,11 @@ safety-rated stop.
 
 `on_hand` = known parts not yet recorded as consumed, wherever they are (stock
 bin, gripper, or a tray before the consumption record). Consumption is recorded
-only after the part is observed in a tray; rework returns re-add it. `reserved`
+only after the part is observed in a tray, one evidence object per record, and
+never twice for the same object (checked inside the ledger transaction); rework
+returns re-add it and require the object to be recorded as consumed. A consumed
+part seen back in its own bin (an interrupted rework) is recorded as returned
+before it is reused. `reserved`
 ≤ `on_hand` is a CHECK constraint. Before each planning round, the executor
 compares the record with the observation and records an evidence-bound
 `adjust_count` for any difference (citing the world revision). At finalisation

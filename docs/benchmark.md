@@ -82,14 +82,22 @@ Output: `raw.jsonl` (one verdict per trial), `results.csv`, `summary.json`,
 > and the symmetry of the comparison. **They are not evidence that Revolve
 > outperforms a real AI agent.** No live-model comparison has been run.
 
-| suite · host | arm | success | false claims | wrong inventory | dup. effects | unauthorized executed | faulted trials recovered | planner requests | mean wall ms/trial | max executor RSS |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| development · Windows x86_64 | Revolve | 14/14 | 0 | 0 | 0 | 0 | 6/6 | 20 | 412 | 10.4 MB |
-| development · Windows x86_64 | baseline | 14/14 | 0 | 0 | 0 | 0 | 6/6 | 317 | 512 | 9.3 MB |
-| held-out · Windows x86_64 | Revolve | 31/31 | 0 | 0 | 0 | 0 | 14/14 | 45 | 659 | 11.5 MB |
-| held-out · Windows x86_64 | baseline | 31/31 | 0 | 0 | 0 | 0 | 14/14 | 1163 | 811 | 9.8 MB |
-| held-out · Jetson Orin Nano (aarch64) | Revolve | 31/31 | 0 | 0 | 0 | 0 | 14/14 | 45 | 831 | 8.9 MB |
-| held-out · Jetson Orin Nano (aarch64) | baseline | 31/31 | 0 | 0 | 0 | 0 | 14/14 | 1163 | 805 | 7.5 MB |
+| suite · host | arm | success | false claims | wrong inventory | dup. effects | refused repeats | unauthorized executed | faulted trials recovered | planner requests | mean wall ms/trial | max executor RSS |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| development · Windows x86_64 | Revolve | 14/14 | 0 | 0 | 0 | 0 | 0 | 6/6 | 20 | 406 | 10.4 MB |
+| development · Windows x86_64 | baseline | 14/14 | 0 | 0 | 0 | 0 | 0 | 6/6 | 317 | 499 | 9.3 MB |
+| held-out · Windows x86_64 | Revolve | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 45 | 659 | 11.9 MB |
+| held-out · Windows x86_64 | baseline | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 1163 | 874 | 9.7 MB |
+| held-out · Jetson Orin Nano (aarch64) | Revolve | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 45 | 864 | 8.8 MB |
+| held-out · Jetson Orin Nano (aarch64) | baseline | 31/31 | 0 | 0 | 0 | 0 | 0 | 14/14 | 1163 | 796 | 7.3 MB |
+
+"Refused repeats" counts pick/place requests that repeated an already-applied
+move and were refused by the adapter's own preconditions (no effect, but
+evidence of an unsafe retry). Inventory correctness is judged from parts
+physically in stock bins (not from the system's ledger), and any part in a kit
+tray without a consumption record is an invariant violation. These stricter
+checks were added after an independent code review; the numbers above were
+produced with them.
 
 Raw data: `results/development-scripted/`, `results/held-out-scripted/`,
 `results/jetson-held-out-scripted/`. No trials were excluded.

@@ -37,27 +37,32 @@ CARGO_TARGET_DIR=~/revolve/target ~/.cargo/bin/cargo build --release --locked -j
 
 ## Verification on the device
 
-`cargo test --release --locked -j 4` on the Jetson: **all 30 tests passed at
-the time of the M4 run** (12 unit + 18 integration), including the real
+`cargo test --release --locked -j 4` on the Jetson: **all 39 tests pass**
+(16 unit + 23 integration, final commit), including the real
 subprocess crash tests (the executor process exits at the effect/result gap and
 a new process recovers), the
 `flock`-based owner lock, the claim/correction race, and every demo scenario
-on both arms. (The suite has since grown; see `docs/current-state.md`.)
+on both arms.
 
-Measured by `scripts/jetson-measure.sh` (`reports/jetson-m4-measure.log`):
+Measured by `scripts/jetson-measure.sh` at the final commit
+(`reports/jetson-m4-measure.log`, 2026-09-29 14:38 UTC):
 
 | measurement | value | source |
 | --- | --- | --- |
-| process start-up (`--version`, `capabilities`, `doctor`) | 3–4 ms mean of 5 | wall clock |
-| nominal run (3 kits, 38 actions, fresh state, process spawn and evaluation included) | 925 ms mean, 871–996 ms, 20 repeats | wall clock |
+| process start-up (`--version`, `capabilities`, `doctor`) | 3–5 ms mean of 5 | wall clock |
+| nominal run (3 kits, 38 actions, fresh state, process spawn and evaluation included) | 953 ms mean, 900–1052 ms, 20 repeats | wall clock |
 | crash-after-effect / crash-before-effect | completed, evaluator PASS, 2 executor processes, 1 simulated crash each | demo output |
 | unknown-outcome-blocked / -restored | blocked safely (PASS) / completed after evidence restored (PASS) | demo output |
 | planner-unavailable (connection lost after start; replan later needed) | completed, 1 restore-planner intervention, PASS | demo output |
-| held-out benchmark (31 scenarios × 2 arms) | 62/62 PASS, 56 s total | `results/jetson-held-out-scripted/` |
-| executor peak RSS | 7.5 MB (baseline) – 8.9 MB (Revolve) | `/proc/self/status` VmHWM, per process |
+| all 10 demonstrations run | evaluator PASS for each | demo output |
+| held-out benchmark (31 scenarios × 2 arms) | 62/62 PASS, 57 s total | `results/jetson-held-out-scripted/` |
+| executor peak RSS | 7.3 MB (baseline) – 8.8 MB (Revolve) | `/proc/self/status` VmHWM, per process |
 | state on disk | 22 MB for 92 runs | `du` |
-| board input power during the workload | mean 5.1 W, max 6.1 W (idle baseline sample ≈ 4.6 W) | `tegrastats` VDD_IN, 83 × 1 s samples |
-| max junction temperature | 59.2 °C | `tegrastats` tj |
+| board input power during the workload | mean 5.1 W, max 6.1 W (idle baseline sample ≈ 4.6 W) | `tegrastats` VDD_IN, 84 × 1 s samples |
+| max junction temperature | 58.7 °C | `tegrastats` tj |
+
+An earlier run at the M4 commit gave the same picture (925 ms mean nominal run,
+59.2 °C max junction temperature).
 
 Power numbers are whole-board input readings during a CPU-light workload in
 `MAXN_SUPER`; they are not a per-process energy measurement.

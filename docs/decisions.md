@@ -67,6 +67,13 @@ Strict CSP; all rendering through DOM text nodes.
 handwritten plans can bind to them. Unique within a run, which is the only scope
 where they are compared.
 
+**D14 — Independent review.** A read-only review by a separate agent traced
+the recovery, claim, accounting, evaluator and UI paths. It confirmed the core
+crash-safety and claim/correction properties and found liveness, accounting and
+evaluator gaps (see the M2+ commit "Fix findings from independent review" for the
+list). All confirmed findings were fixed with regression tests
+(`tests/review_regressions.rs`); benchmark numbers were regenerated afterwards.
+
 **D13 — Restricted grammar, not NLU, in scripted mode.** `parse-request` and
 the UI accept only the kit family's phrasing and refuse anything else rather
 than guessing.

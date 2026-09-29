@@ -39,7 +39,7 @@ composed under existing permission limits.*
 measured resource consumption and predictable behaviour during network loss.*
 
 - **Evidence**: native aarch64 build; full test suite passing on the device;
-  62/62 benchmark trials on the device; executor peak RSS ≤ 9 MB; ~0.9 s for a
+  62/62 benchmark trials on the device; executor peak RSS ≤ 9 MB; ~0.95 s for a
   38-action run including process start-up; board input power 5.1 W mean during
   the workload; planner-loss scenarios behave as specified (validated work
   continues, new planning pauses, no authority change). See `docs/jetson.md`.

@@ -17,14 +17,13 @@ _Last updated: 2026-09-29, end of the first build session._
 
 On Windows (debug and release) and on the Jetson (release):
 
-- `cargo test` — 33 tests pass on Windows (15 unit, 18 integration). On the
-  Jetson, the 30 tests that existed at the M4 run passed; the 3 fake-endpoint
-  HTTP tests were added afterwards and have run on Windows only.
+- `cargo test` — 39 tests pass on Windows and on the Jetson (16 unit, 23
+  integration), at the final commit.
 - `cargo clippy --all-targets` — no warnings; `cargo fmt` applied.
 - `revolve demo --scenario <each of 17 demo scenarios>` — expected outcome, evaluator PASS (both arms via `tests/evaluator.rs`).
 - `revolve run --scenario nominal --plan examples/plans/kit-assembly.json` — completed, PASS.
 - `revolve validate --plan examples/plans/<each>.json` — valid plan accepted; each invalid variant reports its category; exit code 1 when invalid.
-- `revolve benchmark --suite development|held-out` — 14/14 and 31/31 on both arms (Windows); 31/31 both arms on the Jetson.
+- `revolve benchmark --suite development|held-out` — 14/14 and 31/31 on both arms (Windows); 31/31 both arms on the Jetson; regenerated after the review fixes with the stricter evaluator.
 - `revolve correct/pause/resume/cancel` against a running executor from another process — behaves as documented.
 - `revolve serve` — UI checked in headless Edge screenshots (question, mid-run); API boundary checks (missing header, cross-origin, rebinding Host, non-loopback bind) refused; crash + resume through the UI API; same on the Jetson through an SSH tunnel.
 
@@ -39,15 +38,24 @@ On Windows (debug and release) and on the Jetson (release):
 - The pasted master brief was truncated at "Ask for an explicit API-call budget
   before …" (end of §26). Save the full brief as `docs/brief.md` for future sessions.
 
+## Independent review
+
+A read-only review agent traced the recovery, claim, accounting, evaluator and
+UI paths. Core crash safety and claim/correction serialisation held. Confirmed
+findings (liveness around postconditions and finalisation, evidence binding,
+interrupted rework returns, evaluator trusting the ledger, store races, lost
+human actions after a crash, UI GET Host check and scenario paths) were all
+fixed, each with a regression test in `tests/review_regressions.rs` or the
+server unit tests.
+
 ## Known limitations / open issues
 
 - Scripted planner assigns trays before checking destination availability at
   pick time (a pick can precede a failed place; the held part is then placed on
   replan). Correct but not optimal.
-- `store::answer` records the answer and the resulting goal revision in two
-  transactions (a crash between them leaves an answered question without its
-  revision).
 - The UI step list shows the active plan only; older plans are listed with status.
+- UI status probes briefly take the executor lock; acquisition retries for
+  ~0.5 s to tolerate this. A dedicated liveness file would be cleaner.
 
 ## Next concrete task
 
