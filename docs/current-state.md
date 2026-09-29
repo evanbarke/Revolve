@@ -17,7 +17,7 @@ _Last updated: 2026-09-29, end of the first build session._
 
 On Windows (debug and release) and on the Jetson (release):
 
-- `cargo test` — 43 tests pass on Windows (20 unit, 23 integration). The
+- `cargo test` — 45 tests pass on Windows (22 unit, 23 integration). The
   Jetson ran the 39 that existed at the review-fix commit; the four newer unit
   tests (plan-format example, .env lookup, empty-call handling) have run on
   Windows only.
@@ -31,12 +31,11 @@ On Windows (debug and release) and on the Jetson (release):
 
 ## Not performed / unverified
 
-- **Live model**: only a 60-call smoke test (approved budget, fully used) on
-  `nominal`: Revolve completed after an IR-format fix; the baseline did not
-  finish within its share (harness defects, now fixed or instrumented). See
-  `results/live-smoke/summary.md`. The key now comes from
-  `REVOLVE_ANTHROPIC_API_KEY` (environment or gitignored `.env`); the config
-  points there. No live comparison has been run.
+- **Live model**: smoke tests on `nominal` only (118 calls, ~$5.13 in total).
+  After fixes, both arms pass: Revolve 2 calls, baseline (native tool use) 39
+  calls. See `results/live-smoke/summary.md`. The key comes from
+  `REVOLVE_ANTHROPIC_API_KEY` (environment or gitignored `.env`). No live fault
+  scenarios have been run, so there is no live H1 result yet.
 - Real network partition on the Jetson (planner loss is a harness flag).
 - UI tested with screenshots and API calls, not with an interactive browser session.
 - The pasted master brief was truncated at "Ask for an explicit API-call budget
@@ -63,7 +62,7 @@ server unit tests.
 
 ## Next concrete task
 
-With a new call budget: re-run the baseline on `nominal` (~45 calls) and inspect
-the recorded decision envelopes (`planner_calls.detail`) to explain the empty
-decisions; decide on a typed `arguments` object for the baseline schema; then run
-the development suite on both arms and report it next to the scripted results.
+With a call budget: run the live fault scenarios on both arms (crash-after-effect,
+timeout-unknown, unknown-outcome-restored, goal-change, planner-unavailable,
+shortage; ~$2–3 per scenario pair), then the development suite, and report them
+next to the scripted results.

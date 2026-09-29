@@ -295,17 +295,15 @@ pub fn plan_format() -> serde_json::Value {
     })
 }
 
-/// The tool-call format handed to the direct-tool baseline with each request.
+/// The tool-call conventions handed to the direct-tool baseline with each request.
+/// (Live models receive the capabilities as native tools; this note repeats the rules.)
 pub fn call_format() -> serde_json::Value {
     serde_json::json!({
         "notes": [
-            "Choose one decision per turn. For a tool call, `capability` is a tool id and `arguments_json` is a JSON object string with exactly that tool's argument names.",
-            "inventory.consume / inventory.return record exactly one unit (quantity 1) citing the object as evidence.",
-            "Use `status` with an op_key from history to learn the outcome of a call that timed out or was interrupted; retry an earlier call under the same key with retry_of_action_id (otherwise -1)."
-        ],
-        "examples": [
-            {"decision": "call", "capability": "workspace.pick", "arguments_json": "{\"object_id\":\"red-01\",\"source_id\":\"bin-red\"}", "retry_of_action_id": -1},
-            {"decision": "call", "capability": "inventory.consume", "arguments_json": "{\"reservation_id\":\"res-abc\",\"part_kind\":\"red_block\",\"quantity\":1,\"evidence_object_id\":\"red-01\"}", "retry_of_action_id": -1}
+            "Call exactly one tool per turn. Tool names are capability ids with `_` instead of `.` (e.g. workspace_pick).",
+            "inventory_consume / inventory_return record exactly one unit (quantity 1) citing the object as evidence.",
+            "If a call timed out or its outcome is unknown, call ops_status with its op_key; retry it under the same key with retry_call only if it had no effect.",
+            "Invalid decisions appear in history with outcome `invalid` and the reason."
         ]
     })
 }

@@ -78,6 +78,13 @@ evaluator gaps (see the M2+ commit "Fix findings from independent review" for th
 list). All confirmed findings were fixed with regression tests
 (`tests/review_regressions.rs`); benchmark numbers were regenerated afterwards.
 
+**D15 — Baseline uses native tool use.** The first live baseline wrapped each
+tool call in a JSON envelope with the arguments as a JSON string; about 40% of
+the model's decisions came back empty. A direct tool-calling baseline should use
+the provider's tool-use interface: each capability is a tool with a strict
+schema, invalid decisions are fed back into history (as compiler diagnostics
+are for the planner). With that, 39/39 decisions were valid on `nominal`.
+
 **D13 — Restricted grammar, not NLU, in scripted mode.** `parse-request` and
 the UI accept only the kit family's phrasing and refuse anything else rather
 than guessing.

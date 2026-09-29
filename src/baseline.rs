@@ -344,6 +344,25 @@ impl Baseline {
                         None,
                         None,
                     )?;
+                    // Fed back like a compiler diagnostic: the agent sees its invalid decision in history.
+                    let ids = store.materialize(
+                        None,
+                        "agent",
+                        rev,
+                        &[(
+                            "agent-invalid".into(),
+                            "(invalid decision)".into(),
+                            "1".into(),
+                            json!({}),
+                            json!({}),
+                        )],
+                    )?;
+                    store.set_action_status(
+                        ids[0],
+                        A_FAILED,
+                        None,
+                        Some(&format!("invalid: {message}")),
+                    )?;
                 }
                 Ok(AgentDecision::Ask(c)) => {
                     // None: the goal changed meanwhile; re-evaluate instead of asking a stale question.

@@ -123,11 +123,12 @@ Raw data: `results/development-scripted/`, `results/held-out-scripted/`,
 
 ## Live-model smoke test (performed 2026-09-29) and next steps
 
-A 60-call smoke test (`nominal`, both arms, one trial, `claude-opus-5-5`) was
-run: Revolve completed 3/3 kits in 2 planning calls after an IR-format fix; the
-baseline exhausted its share with 1/3 kits built, partly because of harness
-defects that are now fixed or instrumented. Details, token counts and cost
-estimates: `results/live-smoke/summary.md`. This is not yet a comparison.
+Live smoke tests on `nominal` (`claude-opus-5-5`, one trial per arm): after
+fixing the plan-format hand-off (Revolve) and moving the baseline to native tool
+use with strict schemas, both arms pass — Revolve in 2 calls (~27k tokens,
+~$0.35), direct tool calling in 39 calls (~429k tokens, ~$1.80). Details, the
+failed attempts and their diagnosis: `results/live-smoke/summary.md`. One
+nominal scenario is not an H1 result; fault scenarios are next.
 
 A full comparison requires a key in `REVOLVE_ANTHROPIC_API_KEY` (environment or
 project `.env`; or another variable named in `config/planner.json`), an explicit

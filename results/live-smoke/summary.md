@@ -60,11 +60,52 @@ attempt.
   baseline's interface had defects on our side (fixed or instrumented now), and
   one trial of one scenario is not a comparison.
 
-## Suggested next run (needs a new budget)
+## Follow-up runs (owner approved further spend)
 
-1. Baseline decision schema: consider a typed `arguments` object (a union of all
-   tool argument fields) instead of a JSON string — only after the recorded
-   envelopes confirm that the empty-string pattern is the cause.
-2. Re-run `nominal` on the baseline to confirm the fixes (~45 calls, ~$2).
-3. Then the development suite, both arms, 1 trial (~500 calls, ~$30–50 at
-   current per-call sizes).
+| run | arm | calls | input / output tokens | est. cost | outcome |
+| --- | --- | --- | --- | --- | --- |
+| `run-nominal-1790695052813-293b61` | baseline (JSON envelope) | 19 | 108,028 / 2,246 | $0.48 | stopped deliberately after 18 decisions; raw envelopes recorded |
+| `run-nominal-1790695763830-d78932` | baseline (native tool use) | 39 | 423,781 / 5,056 | $1.80 | **completed**, PASS: 3/3 kits, inventory correct, 0 violations |
+
+**Diagnosis from the recorded envelopes.** With the original baseline interface
+(the decision as a JSON envelope whose tool arguments were a JSON *string*, all
+fields required), about 40% of decisions came back as a complete but empty
+envelope (`{"decision":"call","capability":"","arguments_json":""}`, ~100 output
+tokens), sometimes several times from an identical input; one came back as a
+bare `""` and one with `capability: ","`. Rejected decisions were also not fed
+back into the agent's history, so identical inputs repeated. The run was stopped
+at 18 decisions because it could not finish within its cap.
+
+**Fix.** The baseline now uses the Messages API's native tool use: one tool per
+capability plus `ops_status`, `retry_call`, `ask_human` and `finish`, each with a
+strict input schema, `tool_choice: auto` with parallel calls disabled (forced
+tool choice is not supported on this model). Invalid decisions are fed back into
+the agent's history, as compiler diagnostics are for the planner. Result: 39 of
+39 decisions valid, 38 actions and a final report, PASS.
+
+## Clean comparison on `nominal` (one trial each, after both fixes)
+
+| | Revolve | direct tool calling |
+| --- | --- | --- |
+| outcome (evaluator) | completed, PASS | completed, PASS |
+| model calls | 2 (1 rejected by the compiler, repaired) | 39 |
+| input / output tokens | 12,129 / 14,980 | 423,781 / 5,056 |
+| est. cost at list price | $0.35 | $1.80 |
+| total model latency | 111 s (2 long planning calls) | 177 s (39 × ~4.5 s) |
+| false claims / inventory errors / violations | 0 / 0 / 0 | 0 / 0 / 0 |
+
+One scenario, one trial each: this establishes that both arms work end to end
+on the live model and quantifies the cost structure (Revolve ~5× cheaper here;
+the baseline re-reads a growing history every step). It says nothing yet about
+correctness under faults, which is what H1 is about.
+
+**All live calls to date:** 118 HTTP calls, about 1.01M input and 55k output
+tokens, about $5.13 at list price.
+
+## Next
+
+Fault scenarios on the live model, both arms, where the architectures should
+differ: e.g. `crash-after-effect`, `timeout-unknown`, `unknown-outcome-restored`,
+`goal-change`, `planner-unavailable`, `shortage`. Roughly 2–5 calls per scenario
+for Revolve and 40–60 for the baseline, so about $2–3 per scenario pair at
+current sizes.
