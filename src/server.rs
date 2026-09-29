@@ -202,6 +202,9 @@ fn handle(ctx: &Ctx, mut req: Request) {
         (Method::Get, ["api", "runs"]) => list_runs(ctx),
         (Method::Post, ["api", "runs"]) => create(ctx, &body),
         (Method::Post, ["api", "interpret"]) => interpret(ctx, &body),
+        (Method::Get, ["api", "programs", "examples"]) => program_examples(),
+        (Method::Post, ["api", "programs", "write"]) => program_write(ctx, &body),
+        (Method::Post, ["api", "programs", "check"]) => program_check(ctx, &body),
         (Method::Get, ["api", "runs", id]) => run_view(ctx, id),
         (Method::Post, ["api", "runs", id, action]) => act(ctx, id, action, &body),
         _ => Err(Error::new("not found")),
@@ -215,7 +218,7 @@ fn handle(ctx: &Ctx, mut req: Request) {
 
 fn list_scenarios(ctx: &Ctx) -> Result<Value> {
     let mut out = vec![];
-    for sub in ["demo", "development", "held-out"] {
+    for sub in ["playground", "demo", "development", "held-out"] {
         for f in scenario::list_dir(&ctx.scenarios_dir.join(sub)) {
             if let Ok(s) = Scenario::load(&f) {
                 out.push(json!({"id": s.id, "set": sub, "family": s.family, "description": s.description, "goal": s.goal}));
@@ -244,6 +247,9 @@ fn list_runs(ctx: &Ctx) -> Result<Value> {
 
 fn create(ctx: &Ctx, body: &str) -> Result<Value> {
     let v: Value = serde_json::from_str(body)?;
+    if v.get("program").is_some_and(|p| !p.is_null()) {
+        return create_program(ctx, &v);
+    }
     let name = v["scenario"].as_str().unwrap_or("nominal");
     // A scenario is chosen by name only; never by path.
     if name.is_empty()
@@ -303,6 +309,292 @@ fn create(ctx: &Ctx, body: &str) -> Result<Value> {
 }
 
 const LIVE_CONFIG: &str = "config/planner.json";
+
+/// AI calls this server process may make in total (a safety net on top of the
+/// per-request caps). Restart the server to allow more.
+const MAX_AI_CALLS_PER_PROCESS: u32 = 60;
+static AI_CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn scenario_name(v: &Value, default: &str) -> Result<String> {
+    let name = v["scenario"].as_str().unwrap_or(default);
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        crate::bail!("invalid scenario name");
+    }
+    Ok(name.to_string())
+}
+
+/// The table a program is written for: a running run's table as it is now, or a
+/// fresh copy of a scenario's table (deleted when dropped).
+struct TableSource {
+    world: PathBuf,
+    goal: GoalSpec,
+    obs: crate::model::Observation,
+    tmp: Option<PathBuf>,
+}
+
+impl Drop for TableSource {
+    fn drop(&mut self) {
+        if let Some(t) = &self.tmp {
+            let _ = std::fs::remove_dir_all(t);
+        }
+    }
+}
+
+fn table_source(ctx: &Ctx, v: &Value) -> Result<TableSource> {
+    if let Some(run) = v["run_id"].as_str().filter(|r| !r.is_empty()) {
+        let dir = harness::run_dir(&ctx.state_dir, run)?;
+        let world = dir.join("world.db");
+        let (_, goal) = RunStore::open(&dir)?.current_goal()?;
+        let obs = SimWorld::open(&world)?.observe().map_err(Error::new)?;
+        return Ok(TableSource {
+            world,
+            goal,
+            obs,
+            tmp: None,
+        });
+    }
+    let name = scenario_name(v, "messy-table")?;
+    let sc = Scenario::load(&scenario::resolve(&name, &ctx.scenarios_dir)?)?;
+    let tmp = ctx
+        .state_dir
+        .join("validate")
+        .join(crate::util::fresh_id("t"));
+    std::fs::create_dir_all(&tmp)?;
+    let world = tmp.join("world.db");
+    let obs = SimWorld::create(&world, &sc)?
+        .observe()
+        .map_err(Error::new)?;
+    Ok(TableSource {
+        world,
+        goal: sc.goal,
+        obs,
+        tmp: Some(tmp),
+    })
+}
+
+fn program_proposal(v: &Value) -> Result<Value> {
+    let p = &v["program"];
+    let source = p["source"].as_str().unwrap_or("");
+    if source.trim().is_empty() || source.len() > crate::script::MAX_SOURCE {
+        crate::bail!(
+            "a program is required (up to {} characters)",
+            crate::script::MAX_SOURCE
+        );
+    }
+    let text = |k: &str, n: usize| {
+        p[k].as_str()
+            .unwrap_or("")
+            .chars()
+            .take(n)
+            .collect::<String>()
+    };
+    Ok(json!({
+        "language": crate::script::LANGUAGE,
+        "source": source,
+        "explanation": text("explanation", 600),
+        "request": text("request", 800),
+        "author": text("author", 80),
+        "rehearsal": p.get("rehearsal").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+fn create_program(ctx: &Ctx, v: &Value) -> Result<Value> {
+    let name = scenario_name(v, "messy-table")?;
+    let sc = Scenario::load(&scenario::resolve(&name, &ctx.scenarios_dir)?)?;
+    let proposal = program_proposal(v)?;
+    let author = proposal["author"]
+        .as_str()
+        .filter(|a| !a.is_empty())
+        .unwrap_or("human (ui)")
+        .to_string();
+    let (run_id, _) =
+        harness::create_program_run(&ctx.state_dir, &sc, proposal, &author, "interactive")?;
+    Ok(json!({"run_id": run_id}))
+}
+
+fn diag_json(d: &[crate::script::Diag], source: &str) -> Value {
+    let lines: Vec<&str> = source.lines().collect();
+    json!(d.iter().map(|x| json!({"line": x.line, "col": x.col, "message": x.message, "text": lines.get(x.line as usize - 1).map(|l| l.trim_end()).unwrap_or("")})).collect::<Vec<_>>())
+}
+
+/// Check, compile and rehearse a program against a table. Nothing real moves.
+fn check_and_rehearse(ctx: &Ctx, t: &TableSource, source: &str) -> Result<Value> {
+    let env = crate::script::CheckEnv::from(&t.obs, &crate::policy::Policy::default());
+    match crate::script::compile(source, &env) {
+        Err(d) => Ok(json!({"accepted": false, "diagnostics": diag_json(&d, source)})),
+        Ok(c) => {
+            let rehearsal = harness::rehearse(&ctx.state_dir, &t.world, &t.goal, source)?;
+            Ok(
+                json!({"accepted": true, "compiled": c, "rehearsal": rehearsal, "native_target": format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)}),
+            )
+        }
+    }
+}
+
+fn program_examples() -> Result<Value> {
+    let mut out = vec![];
+    for (id, title, explanation, src) in [
+        (
+            "trays-by-color",
+            "Sort by color into trays",
+            "Red blocks go to tray 1, blue to tray 2, green to tray 3 and washers to tray 4. It asks you what to do with anything it can't identify.",
+            include_str!("../examples/programs/trays-by-color.rvs"),
+        ),
+        (
+            "sort-to-bins",
+            "Put everything back in the bins",
+            "Every part on the table goes back into the bin for its kind. Anything unidentified goes to tray 4, because no bin accepts it.",
+            include_str!("../examples/programs/sort-to-bins.rvs"),
+        ),
+        (
+            "kits-from-table",
+            "Build kits from the table",
+            "Fills one tray after another with a red block, a blue block and a washer from the table, until one of them runs out.",
+            include_str!("../examples/programs/kits-from-table.rvs"),
+        ),
+    ] {
+        out.push(json!({"id": id, "title": title, "explanation": explanation, "source": src}));
+    }
+    Ok(json!(out))
+}
+
+fn program_check(ctx: &Ctx, body: &str) -> Result<Value> {
+    let v: Value = serde_json::from_str(body)?;
+    let source = v["source"].as_str().unwrap_or("");
+    if source.trim().is_empty() || source.len() > crate::script::MAX_SOURCE {
+        crate::bail!("a program is required");
+    }
+    let t = table_source(ctx, &v)?;
+    let mut out = check_and_rehearse(ctx, &t, source)?;
+    out["by"] = json!("you");
+    Ok(out)
+}
+
+/// The AI writes a program for the person's words; the checker's messages go
+/// back to it for up to two repairs. Then it is rehearsed on a twin. At most 3
+/// calls per request, each with a cost estimate from the dated pricing config.
+fn program_write(ctx: &Ctx, body: &str) -> Result<Value> {
+    let v: Value = serde_json::from_str(body)?;
+    let text = v["text"].as_str().unwrap_or("").trim().to_string();
+    if text.is_empty() || text.len() > 800 {
+        crate::bail!("say what you want in a few sentences (up to 800 characters)");
+    }
+    let t = table_source(ctx, &v)?;
+    let cfg = LiveConfig::load(Path::new(LIVE_CONFIG)).map_err(|_| {
+        Error::new("Writing programs from your words needs the AI (config/planner.json and an API key). You can still run the examples.")
+    })?;
+    if !cfg.key_present() {
+        crate::bail!(
+            "Writing programs needs an API key ({} is not set). You can still run the examples.",
+            cfg.api_key_env
+        );
+    }
+    let (pricing, model) = (cfg.pricing.clone(), cfg.model.clone());
+    let dir = ctx.state_dir.join("budgets");
+    std::fs::create_dir_all(&dir)?;
+    let ledger = dir.join(format!("{}.json", crate::util::fresh_id("program")));
+    BudgetLedger::init(&ledger, 3)?;
+    let mut planner = LivePlanner::new(cfg, &ledger).map_err(|e| Error::new(e.to_string()))?;
+    let summary = crate::script::table_summary(&t.obs);
+    let env = crate::script::CheckEnv::from(&t.obs, &crate::policy::Policy::default());
+    let started = std::time::Instant::now();
+    let (mut tin, mut tout) = (0u64, 0u64);
+    let mut attempts = vec![];
+    let mut previous: Option<(String, Vec<String>)> = None;
+    let mut last = None;
+    for _ in 0..3 {
+        if AI_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= MAX_AI_CALLS_PER_PROCESS {
+            crate::bail!(
+                "this server has used its {MAX_AI_CALLS_PER_PROCESS} AI calls; restart it to allow more"
+            );
+        }
+        let (r, info) = planner.write_program(
+            &text,
+            &summary,
+            previous.as_ref().map(|(s, p)| (s.as_str(), p.as_slice())),
+        );
+        if let Some((a, b)) = info.usage {
+            tin += a;
+            tout += b;
+        }
+        let w = r.map_err(|e| Error::new(format!("The AI could not write a program ({e}).")))?;
+        if !w.understood && w.source.trim().is_empty() {
+            last = Some((w, None));
+            break;
+        }
+        match crate::script::compile(&w.source, &env) {
+            Ok(c) => {
+                attempts.push(json!({"accepted": true}));
+                last = Some((w, Some(c)));
+                break;
+            }
+            Err(d) => {
+                attempts.push(json!({"accepted": false, "diagnostics": diag_json(&d, &w.source)}));
+                let lines: Vec<&str> = w.source.lines().collect();
+                let problems = d
+                    .iter()
+                    .map(|x| {
+                        format!(
+                            "line {}: {} | {}",
+                            x.line,
+                            x.message,
+                            lines
+                                .get(x.line as usize - 1)
+                                .map(|l| l.trim())
+                                .unwrap_or("")
+                        )
+                    })
+                    .collect();
+                previous = Some((w.source.clone(), problems));
+                last = Some((w, None));
+            }
+        }
+    }
+    let seconds = started.elapsed().as_secs_f64();
+    let cost = match &pricing {
+        Some(p) => json!(crate::planner::live::estimate_cost_usd(p, tin, tout)),
+        None => Value::Null,
+    };
+    let Some((w, compiled)) = last else {
+        crate::bail!("the AI did not answer");
+    };
+    let rehearsal = match &compiled {
+        Some(_) => Some(harness::rehearse(
+            &ctx.state_dir,
+            &t.world,
+            &t.goal,
+            &w.source,
+        )?),
+        None => None,
+    };
+    let diagnostics = match (&compiled, &previous) {
+        (None, Some((src, _))) => crate::script::compile(src, &env)
+            .err()
+            .map(|d| diag_json(&d, src)),
+        _ => None,
+    };
+    Ok(json!({
+        "understood": w.understood,
+        "not_possible": w.not_possible,
+        "source": w.source,
+        "explanation": w.explanation,
+        "accepted": compiled.is_some(),
+        "compiled": compiled,
+        "diagnostics": diagnostics,
+        "attempts": attempts,
+        "rehearsal": rehearsal,
+        "native_target": format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+        "by": format!("AI ({model})"),
+        "seconds": (seconds * 10.0).round() / 10.0,
+        "usage": {"input_tokens": tin, "output_tokens": tout},
+        "cost_usd_estimate": cost,
+    }))
+}
 
 /// Turn a person's words into a structured request for them to confirm. Tries the
 /// free offline parser first; otherwise one small AI call (with a 1-call cap).
@@ -437,6 +729,23 @@ fn act(ctx: &Ctx, run_id: &str, action: &str, body: &str) -> Result<Value> {
             let rev = store.submit_goal_revision(&goal, "human (ui)", "correction from the UI")?;
             Ok(json!({"ok": true, "message": format!("goal revision {rev} recorded")}))
         }
+        "program" => {
+            // A new program for this run (the person changed what they want). It
+            // takes over at the next step boundary; completed moves stay.
+            let proposal = program_proposal(&v)?;
+            let (rev, seq) = RunStore::open(&dir)?.submit_program(
+                &proposal,
+                "human (ui)",
+                "the person changed the request",
+                true,
+            )?;
+            if !OwnerLock::is_held(&dir) {
+                spawn_executor(ctx, run_id)?;
+            }
+            Ok(
+                json!({"ok": true, "message": format!("new program #{seq} submitted (request revision {rev}); it takes over after the current move")}),
+            )
+        }
         "answer" => {
             let q = v["question_id"]
                 .as_i64()
@@ -484,6 +793,68 @@ fn act(ctx: &Ctx, run_id: &str, action: &str, body: &str) -> Result<Value> {
     }
 }
 
+/// The program part of a run view: the active (or latest) program, what the
+/// compiler established, and its call log with source lines.
+fn program_view(
+    store: &RunStore,
+    plans: &[PlanRow],
+    actions: &[ActionRow],
+    active: Option<i64>,
+) -> Result<Value> {
+    let is_prog = |p: &PlanRow| {
+        p.proposal.get("language").and_then(Value::as_str) == Some(crate::script::LANGUAGE)
+    };
+    let Some(p) = plans
+        .iter()
+        .rev()
+        .find(|p| Some(p.plan_seq) == active && is_prog(p))
+        .or_else(|| plans.iter().rev().find(|p| is_prog(p)))
+    else {
+        return Ok(Value::Null);
+    };
+    let built = store
+        .events(0, 100_000)?
+        .into_iter()
+        .rev()
+        .find(|e| {
+            e.kind == "program_built" && e.message.starts_with(&format!("program #{} ", p.plan_seq))
+        })
+        .and_then(|e| e.data);
+    let line_of = |a: &ActionRow| {
+        a.step_id
+            .trim_start_matches('L')
+            .split('.')
+            .next()
+            .and_then(|l| l.parse::<u32>().ok())
+    };
+    let calls: Vec<Value> = actions
+        .iter()
+        .filter(|a| a.plan_seq == Some(p.plan_seq))
+        .map(|a| {
+            let args = a.resolved_arguments.clone().unwrap_or_else(|| a.arguments.clone());
+            json!({"i": a.seq, "line": line_of(a), "capability": a.capability, "args": args, "status": a.status, "error": a.error, "action_id": a.action_id})
+        })
+        .collect();
+    let history: Vec<Value> = plans
+        .iter()
+        .filter(|x| is_prog(x))
+        .map(|x| json!({"plan_seq": x.plan_seq, "status": x.status, "goal_revision": x.goal_revision, "author": x.planner}))
+        .collect();
+    Ok(json!({
+        "plan_seq": p.plan_seq,
+        "status": p.status,
+        "source": p.proposal["source"],
+        "explanation": p.proposal["explanation"],
+        "request": p.proposal["request"],
+        "author": p.planner,
+        "rehearsal": p.proposal.get("rehearsal"),
+        "built": built,
+        "diagnostics": p.diagnostics,
+        "calls": calls,
+        "history": history,
+    }))
+}
+
 fn run_view(ctx: &Ctx, run_id: &str) -> Result<Value> {
     let dir = harness::run_dir(&ctx.state_dir, run_id)?;
     let store = RunStore::open(&dir)?;
@@ -527,6 +898,11 @@ fn run_view(ctx: &Ctx, run_id: &str) -> Result<Value> {
             })
         })
         .collect();
+    let program = if meta.planner == "program" {
+        program_view(&store, &plans, &actions, active)?
+    } else {
+        Value::Null
+    };
     let (rev, goal) = store.current_goal()?;
     let truth_locs: Vec<Value> = truth
         .locations
@@ -554,6 +930,7 @@ fn run_view(ctx: &Ctx, run_id: &str) -> Result<Value> {
         vec![]
     };
     Ok(json!({
+        "program": program,
         "meta": meta,
         "state": st,
         "executor": executor_state(ctx, run_id, &dir),

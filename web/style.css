@@ -153,3 +153,47 @@ details.advanced { margin: 4px 0 10px; }
 .stale button { margin-left: 8px; }
 .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 8px; max-width: calc(100% - 32px); }
 [hidden] { display: none !important; }
+
+/* ---- programs ---- */
+:root { --code-bg: #f3f5f8; --kw: #7a2fc0; --str: #1d7a46; --num: #b45309; --com: #6b7480; --fn: #1f5f99; --cur: #fff3c4; --ran: #e8f5ec; --arm: #3b4552; }
+@media (prefers-color-scheme: dark) {
+  :root { --code-bg: #14181d; --kw: #c7a6ff; --str: #6fd39a; --num: #f0b060; --com: #7d8793; --fn: #8cc0f5; --cur: #3a3212; --ran: #16291f; --arm: #b5bdc8; }
+}
+textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; width: 100%; resize: vertical; }
+.examples { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -2px 0 8px; }
+.examples button { font-size: 13px; padding: 4px 10px; }
+.program .prog-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.program .explain { font-size: 16px; margin: 4px 0 12px; }
+.program h3 { font-size: 14px; margin: 12px 0 6px; }
+.prog-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 760px) { .prog-grid { grid-template-columns: 1fr; } .two { grid-template-columns: 1fr; } }
+pre.code { font-variant-ligatures: none; margin: 0; background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 0; font: 13px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; overflow-x: auto; max-height: 520px; overflow-y: auto; }
+pre.code .ln { display: block; padding: 0 10px 0 0; white-space: pre; border-left: 3px solid transparent; }
+pre.code .ln .num { display: inline-block; width: 34px; text-align: right; padding-right: 10px; color: var(--com); user-select: none; }
+pre.code .ln.ran { background: var(--ran); }
+pre.code .ln.cur { background: var(--cur); border-left-color: var(--warn); }
+pre.code .ln.err { background: var(--bad-bg); border-left-color: var(--bad); }
+pre.code .kw { color: var(--kw); font-weight: 600; } pre.code .str { color: var(--str); } pre.code .num-lit { color: var(--num); }
+pre.code .com { color: var(--com); font-style: italic; } pre.code .fn { color: var(--fn); font-weight: 600; }
+textarea.code-edit { font-variant-ligatures: none; font: 13px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; min-height: 320px; }
+ul.checks { list-style: none; margin: 0; padding: 0; }
+ul.checks li { padding: 4px 0 4px 26px; position: relative; border-bottom: 1px dashed var(--line); }
+ul.checks li::before { position: absolute; left: 2px; top: 3px; font-weight: 700; }
+ul.checks li.ok::before { content: "✓"; color: var(--ok); }
+ul.checks li.warn::before { content: "!"; color: var(--warn); }
+ul.checks li.bad::before { content: "✗"; color: var(--bad); }
+ul.checks .detail { display: block; color: var(--muted); font-size: 12px; }
+.diag { color: var(--bad); font-size: 13px; margin: 2px 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chips span { font-size: 12px; background: var(--idle-bg); color: var(--idle); border-radius: 6px; padding: 2px 7px; }
+.writing { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+.dots::after { content: "…"; animation: blink 1s steps(3, end) infinite; }
+@keyframes blink { 50% { opacity: .3; } }
+.change-box { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.sw.arm { background: var(--arm); border-radius: 50%; }
+#workspace .arm-link { stroke: var(--arm); stroke-width: 12; stroke-linecap: round; }
+#workspace .arm-joint { fill: var(--card); stroke: var(--arm); stroke-width: 4; }
+#workspace .arm-base { fill: var(--arm); }
+#workspace .arm-claw { stroke: var(--arm); stroke-width: 4; fill: none; stroke-linecap: round; }
+#workspace .slot.active { stroke: var(--warn); stroke-width: 3; }
+#workspace .table-top { fill: var(--slot); stroke: var(--line); stroke-dasharray: 6 4; }

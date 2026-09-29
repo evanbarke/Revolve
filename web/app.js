@@ -160,6 +160,10 @@ function describeStep(a, v, trayKit) {
 // ------------------------------------------------------------------ scenarios
 
 const FRIENDLY = [
+  ["messy-table", "A messy table", "3 red, 2 blue and 2 green blocks, 3 washers and 1 part the camera can't identify, all on the table. Bins and trays are empty."],
+  ["workshop", "A stocked workshop", "Bins full of parts, a small pile on the table, 4 empty trays."],
+  ["messy-table-power-cut", "A messy table + a power cut", "The power fails right after the 4th part is put down. Press Continue: it checks what happened and the program carries on without repeating anything."],
+  ["messy-table-thief", "A messy table + someone takes a part", "A red block disappears from the table mid-run. Watch the program notice and carry on."],
   ["nominal", "Build 3 kits (plenty of parts)", "Everything is available. Try changing the request while it works."],
   ["substitution-approved", "Build 3 kits: short of blue blocks", "It will ask whether it may use a green block instead."],
   ["shortage", "Build 3 kits: not enough blue blocks", "It builds what it can and tells you exactly what is missing."],
@@ -193,7 +197,7 @@ function fillScenarioSelect() {
       if (og.childNodes.length) sel.append(og);
     }
   }
-  sel.value = keep && [...sel.options].some((o) => o.value === keep) ? keep : "nominal";
+  sel.value = keep && [...sel.options].some((o) => o.value === keep) ? keep : "messy-table";
   describeScenario();
 }
 
@@ -507,9 +511,13 @@ function storyLines(v, trayKit) {
 }
 
 function renderStory(v, trayKit) {
+  renderStoryLines(storyLines(v, trayKit));
+}
+
+function renderStoryLines(lines) {
   const ol = $("story");
   clear(ol);
-  for (const l of storyLines(v, trayKit).slice(-40)) ol.append(h("li", { class: l.cls }, l.text, h("span", { class: "t" }, l.t)));
+  for (const l of lines.slice(-40)) ol.append(h("li", { class: l.cls }, l.text, h("span", { class: "t" }, l.t)));
 }
 
 // ------------------------------------------------------------------ workspace drawing
@@ -544,12 +552,14 @@ function drawWorkspace(v, trayKit) {
   const withheld = new Set(t.evidence_withheld_from_system || []);
   const bins = t.locations.filter((l) => l.loc_type === "bin");
   const trays = t.locations.filter((l) => l.loc_type === "tray").sort((a, b) => trayNum(a.location_id) - trayNum(b.location_id));
-  const grip = t.locations.find((l) => l.loc_type === "gripper");
+  const table = t.locations.find((l) => l.loc_type === "table");
+  layoutBoxes = {};
   const report = v.state.final_report;
   const verified = new Set((report && report.claims_source !== "agent" && report.kits_verified_complete) || []);
   const box = (l, x, y, w, hgt, label) => {
     const g = s("g", {});
-    g.append(s("rect", { x, y, width: w, height: hgt, rx: 8, class: "slot" + (l.available ? "" : " off") + (verified.has(l.location_id) ? " done" : "") }));
+    layoutBoxes[l.location_id] = { x, y, w, h: hgt };
+    g.append(s("rect", { x, y, width: w, height: hgt, rx: 8, "data-slot": l.location_id, class: (l.loc_type === "table" ? "slot table-top" : "slot") + (l.available ? "" : " off") + (verified.has(l.location_id) ? " done" : "") }));
     g.append(s("text", { x: x + 8, y: y + 17 }, label));
     drawObjects(g, l.objects, x, y, w, hgt);
     if (!l.available) g.append(s("text", { x: x + 8, y: y + hgt - 10, class: "off-label" }, "NOT AVAILABLE"));
@@ -564,13 +574,536 @@ function drawWorkspace(v, trayKit) {
   bins.forEach((l, i) => {
     const k = { "bin-red": "red_block", "bin-blue": "blue_block", "bin-green": "green_block", "bin-washer": "washer" }[l.location_id];
     const label = (k ? kindName(k, 2).replace(/^./, (c) => c.toUpperCase()) : l.location_id) + " (" + l.objects.length + ")";
-    box(l, 10 + i * (bw + 10), 10, bw, 110, label);
+    box(l, 10 + i * (bw + 10), 10, bw, 104, label);
   });
-  if (grip) box(grip, 380, 140, 140, 70, "Robot hand");
+  if (table) box(table, 10, 124, 330, 96, "Table (" + table.objects.length + ")");
   const tw = (880 - (trays.length - 1) * 10) / Math.max(1, trays.length);
-  trays.forEach((l, i) => box(l, 10 + i * (tw + 10), 230, tw, 140,
-    trayKit[l.location_id] ? "Kit " + trayKit[l.location_id] + " · tray " + trayNum(l.location_id) : "Tray " + trayNum(l.location_id) + (l.objects.length ? "" : " (spare)")));
+  trays.forEach((l, i) => box(l, 10 + i * (tw + 10), 232, tw, 138,
+    trayKit[l.location_id] ? "Kit " + trayKit[l.location_id] + " · tray " + trayNum(l.location_id) : "Tray " + trayNum(l.location_id) + (l.objects.length || v.program ? "" : " (spare)")));
+  drawArm(svg, v);
 }
+
+// ------------------------------------------------------------------ programs (Revolve Script)
+
+let examples = [];
+let reviewing = null; // the proposal shown in the start review card
+let revision = null; // a proposed replacement for a running program
+
+function placeLabel(id) {
+  if (!id) return "?";
+  if (id === "table") return "the table";
+  if (id === "gripper") return "the arm";
+  if (id.startsWith("bin-")) return "the " + id.slice(4) + " bin";
+  if (id.startsWith("tray-")) return "tray " + id.slice(5);
+  return id;
+}
+
+function partLabel(id) {
+  const k = kindOf(id);
+  return k === "unknown" ? "the unidentified part " + id : "a " + kindName(k, 1) + " (" + id + ")";
+}
+
+const KEYWORDS = new Set(["if", "elif", "else", "for", "in", "not", "and", "or", "def", "return", "break", "continue", "pass", "expect", "is", "True", "False", "None"]);
+const BUILTIN_FNS = new Set(["parts", "places", "count", "holding", "move", "pick", "place", "ask", "say", "print", "len", "range", "str", "int", "min", "max", "sum", "abs", "sorted"]);
+
+// Syntax colouring by tokens; all text goes in via text nodes.
+function codeLine(text) {
+  const out = [];
+  const re = /(#.*$)|("(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?)|(\b\d+\b)|([A-Za-z_][A-Za-z0-9_]*)|(\s+)|(.)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m[1]) out.push(h("span", { class: "com" }, m[1]));
+    else if (m[2]) out.push(h("span", { class: "str" }, m[2]));
+    else if (m[3]) out.push(h("span", { class: "num-lit" }, m[3]));
+    else if (m[4]) out.push(KEYWORDS.has(m[4]) ? h("span", { class: "kw" }, m[4]) : BUILTIN_FNS.has(m[4]) ? h("span", { class: "fn" }, m[4]) : m[4]);
+    else out.push(m[0]);
+  }
+  return out;
+}
+
+function codeView(source) {
+  const pre = h("pre", { class: "code" });
+  source.split("\n").forEach((line, i) => {
+    pre.append(h("span", { class: "ln", "data-line": i + 1 }, h("span", { class: "num" }, String(i + 1)), ...codeLine(line)));
+  });
+  return pre;
+}
+
+function markLines(pre, marks) {
+  for (const el of pre.querySelectorAll(".ln")) {
+    const n = +el.getAttribute("data-line");
+    el.className = "ln" + (marks.err && marks.err.has(n) ? " err" : "") + (marks.cur === n ? " cur" : marks.ran && marks.ran.has(n) ? " ran" : "");
+  }
+}
+
+const EFFECT_WORDS = { look: "look at the table", move: "move parts", pick: "pick parts up", place: "put parts down", ask: "ask you questions", say: "show you messages" };
+const IMPORT_WORDS = { "cap.observe": "looking", "cap.pick": "picking up", "cap.place": "putting down", "human.ask": "asking you", "human.say": "messages" };
+
+function checksList(c, target) {
+  const ul = h("ul", { class: "checks" });
+  const f = c.facts || {};
+  const li = (cls, text, detail) => ul.append(h("li", { class: cls }, text, detail ? h("span", { class: "detail" }, detail) : null));
+  li("ok", "Reads correctly: " + c.lines + " lines", "Every name, part kind and place was checked against the table.");
+  li("ok", "It can only " + listJoin((f.effects || []).map((e) => EFFECT_WORDS[e] || e)), "Anything else is impossible: the compiled program has no other way out.");
+  const named = f.places_named || [];
+  li("ok", named.length ? "Places it names: " + listJoin(named.map(placeLabel)) : "It names no places directly",
+    f.dynamic_destinations ? "Places chosen while it runs are checked by the safety policy before every move." : null);
+  li("ok", "Always finishes", "No endless loops and no recursion" + (f.loops ? " (" + f.loops + " loop" + (f.loops === 1 ? "" : "s") + ", each over a fixed list)." : "."));
+  for (const q of f.questions || []) li("warn", "It may ask you: “" + q + "”");
+  li("ok", "Says how to check success: " + (f.expectations || []).length + " check" + ((f.expectations || []).length === 1 ? "" : "s"), (f.expectations || []).map((e) => "• " + e).join("  "));
+  li("ok", "Compiled to machine code", c.wasm_bytes + " bytes of WebAssembly → native " + (target || "") + " code. It can reach only: " + listJoin((c.imports || []).map((i) => IMPORT_WORDS[i] || i)) + ". sha256 " + (c.sha256 || "").slice(0, 12) + "…");
+  return ul;
+}
+
+function endStateChips(r) {
+  const by = {};
+  for (const o of r.end_state || []) {
+    if (o.at === "outside") continue;
+    (by[o.at] = by[o.at] || []).push(o.kind);
+  }
+  const chips = h("div", { class: "chips" });
+  for (const [at, kinds] of Object.entries(by).sort()) {
+    const counts = {};
+    for (const k of kinds) counts[k] = (counts[k] || 0) + 1;
+    const txt = Object.entries(counts).map(([k, n]) => n + " " + (k === "unknown" ? (n === 1 ? "unidentified part" : "unidentified parts") : kindName(k, n))).join(", ");
+    chips.append(h("span", {}, placeLabel(at).replace(/^the /, "").replace(/^./, (c) => c.toUpperCase()) + ": " + txt));
+  }
+  return chips;
+}
+
+function rehearsalView(r) {
+  const box = h("div", {});
+  if (!r) return box;
+  const rep = r.report || {};
+  const exps = rep.expectations || [];
+  const held = exps.filter((e) => e.held).length;
+  const ul = h("ul", { class: "checks" });
+  if (r.status === "completed") ul.append(h("li", { class: "ok" }, "Rehearsed on a copy of the table: " + r.moves.length + " move" + (r.moves.length === 1 ? "" : "s") + ", all " + exps.length + " checks passed", h("span", { class: "detail" }, "Took " + (r.duration_ms / 1000).toFixed(1) + " s. Nothing real moved.")));
+  else if (r.status === "partial") ul.append(h("li", { class: "warn" }, "Rehearsal: " + held + " of " + exps.length + " checks passed", h("span", { class: "detail" }, "Read the checks below before running it.")));
+  else ul.append(h("li", { class: "bad" }, "The rehearsal stopped: " + (r.reason || r.status)));
+  for (const e of exps) ul.append(h("li", { class: e.held ? "ok" : "bad" }, e.description));
+  for (const q of r.questions || []) ul.append(h("li", { class: "warn" }, "It will ask you: “" + q.question + "”", h("span", { class: "detail" }, "The rehearsal assumed: " + q.assumed)));
+  box.append(ul, h("p", { class: "muted small" }, "Where things will end up:"), endStateChips(r));
+  return box;
+}
+
+function diagList(diags) {
+  const box = h("div", {});
+  for (const d of diags || []) box.append(h("p", { class: "diag" }, "Line " + d.line + ": " + d.message));
+  return box;
+}
+
+function metaLine(r) {
+  const bits = [];
+  if (r.by) bits.push("written by " + r.by);
+  if (r.seconds) bits.push(r.seconds + " s");
+  if (r.cost_usd_estimate != null) bits.push("about $" + Number(r.cost_usd_estimate).toFixed(3));
+  const fixes = (r.attempts || []).filter((a) => !a.accepted).length;
+  if (fixes && r.accepted) bits.push("the checker caught problems " + fixes + "× and the AI fixed them");
+  return bits.join(" · ");
+}
+
+// A proposed program: code, what was checked, the rehearsal, and what to do next.
+function renderReview(card, r, opts) {
+  clear(card);
+  card.hidden = false;
+  const head = h("div", { class: "prog-head" }, h("h2", {}, opts.title || "The program"), h("span", { class: "muted small" }, metaLine(r)));
+  card.append(head);
+  if (r.explanation) card.append(h("p", { class: "explain" }, r.explanation));
+  if (r.understood === false && r.not_possible) card.append(h("p", { class: "diag" }, "Not possible here: " + r.not_possible));
+  const buttons = h("div", { class: "buttons" });
+  if (!r.source) {
+    card.append(buttons);
+    buttons.append(actionButton("Change my words", opts.onChangeWords, "ghost"));
+    return;
+  }
+  const left = h("div", {});
+  const pre = codeView(r.source);
+  const edit = h("textarea", { class: "code-edit", hidden: true, spellcheck: "false" });
+  edit.value = r.source;
+  left.append(pre, edit);
+  const right = h("div", {});
+  if (r.accepted) {
+    right.append(h("h3", {}, "Checked before anything moves"), checksList(r.compiled, r.native_target));
+    right.append(h("h3", {}, "Rehearsal"), rehearsalView(r.rehearsal));
+  } else {
+    right.append(h("h3", {}, "The checker found problems"), diagList(r.diagnostics), h("p", { class: "muted small" }, "Nothing ran. Change your words, or edit the program and check it again."));
+    markLines(pre, { err: new Set((r.diagnostics || []).map((d) => d.line)) });
+  }
+  card.append(h("div", { class: "prog-grid" }, left, right), buttons);
+  const canRun = r.accepted && r.rehearsal && r.rehearsal.status !== "blocked" && r.rehearsal.status !== "failed";
+  if (canRun) buttons.append(actionButton(opts.runLabel || "Run it for real", () => opts.onRun(r), "big"));
+  buttons.append(actionButton("Edit the program", () => {
+    const editing = edit.hidden;
+    edit.hidden = !editing;
+    pre.hidden = editing;
+    if (editing) edit.focus();
+  }, "ghost"));
+  buttons.append(actionButton("Check my changes", async () => {
+    try {
+      const out = await api("POST", "/api/programs/check", Object.assign({ source: edit.value }, opts.where()));
+      renderReview(card, Object.assign(out, { source: edit.value, explanation: r.explanation, by: "you (edited)" }), opts);
+    } catch (e) { toast(e.message); }
+  }, "ghost"));
+  if (opts.onChangeWords) buttons.append(actionButton(opts.changeLabel || "Change my words", opts.onChangeWords, "ghost"));
+}
+
+function writingState(card, what) {
+  clear(card);
+  card.hidden = false;
+  const t0 = Date.now();
+  const secs = h("span", { class: "muted small" }, "");
+  card.append(h("div", { class: "writing" }, h("span", { class: "dots" }, what), secs));
+  card.append(h("p", { class: "muted small" }, "Then the compiler checks it, compiles it to machine code and rehearses it on a copy of the table. Usually 10–40 seconds."));
+  const timer = setInterval(() => { if (!card.contains(secs)) return clearInterval(timer); secs.textContent = Math.round((Date.now() - t0) / 1000) + " s"; }, 500);
+  return () => clearInterval(timer);
+}
+
+function startWhere() { return { scenario: $("scenario-select").value }; }
+
+async function writeProgram(text) {
+  const card = $("program-card");
+  const stop = writingState(card, "The AI is writing a program for: “" + text + "”");
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  try {
+    const r = await api("POST", "/api/programs/write", Object.assign({ text }, startWhere()));
+    stop();
+    reviewing = Object.assign(r, { request: text });
+    renderReview(card, reviewing, { where: startWhere, onRun: runProgram, onChangeWords: () => { card.hidden = true; $("new-request").focus(); } });
+  } catch (e) {
+    stop();
+    clear(card);
+    card.append(h("p", { class: "diag" }, e.message), h("div", { class: "buttons" }, actionButton("Change my words", () => { card.hidden = true; $("new-request").focus(); }, "ghost")));
+  }
+}
+
+async function checkExample(ex) {
+  const card = $("program-card");
+  const stop = writingState(card, "Checking the example “" + ex.title + "”");
+  try {
+    const r = await api("POST", "/api/programs/check", Object.assign({ source: ex.source }, startWhere()));
+    stop();
+    reviewing = Object.assign(r, { source: ex.source, explanation: ex.explanation || ex.title, by: "example (no AI)", request: ex.title });
+    renderReview(card, reviewing, { where: startWhere, onRun: runProgram, onChangeWords: () => { card.hidden = true; } , changeLabel: "Close" });
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) { stop(); toast(e.message); }
+}
+
+async function runProgram(r) {
+  try {
+    const out = await api("POST", "/api/runs", {
+      scenario: $("scenario-select").value,
+      program: { source: r.source, explanation: r.explanation || "", request: r.request || "", author: r.by || "", rehearsal: r.rehearsal || null },
+    });
+    $("program-card").hidden = true;
+    $("new-request").value = "";
+    await loadRuns(out.run_id);
+    showMode();
+    history.replaceState(null, "", "#run=" + encodeURIComponent(out.run_id));
+    await act("start", {}, true);
+    toast("Running.");
+    $("now-card").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) { toast("Could not start: " + e.message); }
+}
+
+async function loadExamples() {
+  try { examples = await api("GET", "/api/programs/examples"); } catch { examples = []; }
+  const box = $("examples");
+  clear(box);
+  if (!examples.length) return;
+  box.append(h("span", { class: "muted small" }, "Or try an example (no AI needed):"));
+  for (const ex of examples) box.append(actionButton(ex.title, () => checkExample(ex), "ghost"));
+}
+
+// ---- a running program
+
+function programCalls(v) { return (v.program && v.program.calls) || []; }
+
+function describeCall(c) {
+  const a = c.args || {};
+  switch (c.capability) {
+    case "workspace.observe": return "Looking at the table";
+    case "workspace.pick": return "Picking up " + partLabel(a.object_id) + (a.source_id ? " from " + placeLabel(a.source_id) : "");
+    case "workspace.place": return "Putting " + partLabel(a.object_id) + " in " + placeLabel(a.destination_id);
+    case "human.ask": return "Asking you: " + (a.question || "");
+    case "human.say": return "Says: " + (a.message || "");
+    case "expect": return "Checking: " + (a.description || "");
+    default: return c.capability;
+  }
+}
+
+function renderRunningProgram(v) {
+  const card = $("run-program-card");
+  const p = v.program;
+  if (!p || !p.source) { card.hidden = true; return; }
+  card.hidden = false;
+  const key = p.plan_seq + ":" + p.source.length;
+  if (card.getAttribute("data-key") !== key) {
+    card.setAttribute("data-key", key);
+    clear(card);
+    const built = p.built || {};
+    const meta = ["program #" + p.plan_seq, p.author ? "by " + p.author : "", built.bytes ? "compiled: " + built.bytes + " bytes WebAssembly → native code" : ""].filter(Boolean).join(" · ");
+    card.append(h("div", { class: "prog-head" }, h("h2", {}, "The program"), h("span", { class: "muted small" }, meta)));
+    if (p.request) card.append(h("p", { class: "muted small" }, "You asked: “" + p.request + "”"));
+    if (p.explanation) card.append(h("p", { class: "explain" }, p.explanation));
+    const right = h("div", { id: "run-program-side" });
+    card.append(h("div", { class: "prog-grid" }, h("div", {}, codeView(p.source)), right));
+  }
+  const pre = card.querySelector("pre.code");
+  const calls = programCalls(v);
+  const running = v.executor.active && v.state.status === "running";
+  const last = calls[calls.length - 1];
+  const ran = new Set(calls.filter((c) => c.status === "succeeded" || c.status === "failed").map((c) => c.line));
+  const cur = last && (running || !["completed", "partial", "stopped"].includes(v.state.status)) ? last.line : null;
+  markLines(pre, { ran, cur });
+  // Side: the checks it states and what happened to them, then what was verified before it ran.
+  const side = card.querySelector("#run-program-side");
+  clear(side);
+  const exps = calls.filter((c) => c.capability === "expect");
+  const facts = (p.built && p.built.facts) || {};
+  side.append(h("h3", {}, "How success is checked"));
+  const ul = h("ul", { class: "checks" });
+  for (const d of facts.expectations || []) {
+    const got = exps.find((e) => e.args.description === d);
+    ul.append(h("li", { class: got ? (got.args.held ? "ok" : "bad") : "warn" }, d, h("span", { class: "detail" }, got ? (got.args.held ? "Held when checked, by looking at the table." : "Did not hold when checked.") : "Not checked yet.")));
+  }
+  side.append(ul);
+  const moves = calls.filter((c) => c.capability === "workspace.place" && c.status === "succeeded").length;
+  const refused = calls.filter((c) => (c.capability === "workspace.place" || c.capability === "workspace.pick") && c.status === "failed").length;
+  side.append(h("p", { class: "muted small" }, moves + " part" + (moves === 1 ? "" : "s") + " placed" + (refused ? ", " + refused + " move" + (refused === 1 ? "" : "s") + " could not be done" : "") + " · " + calls.length + " program steps logged"));
+  if (p.built && p.built.facts) {
+    const det = h("details", {}, h("summary", {}, "What was checked before it ran"));
+    det.append(checksList({ facts: p.built.facts, lines: p.source.split("\n").filter((l) => l.trim()).length, wasm_bytes: p.built.bytes, imports: p.built.imports, sha256: p.built.sha256 }, ""));
+    if (p.rehearsal) det.append(h("h3", {}, "Rehearsal"), rehearsalView(p.rehearsal));
+    side.append(det);
+  }
+}
+
+function renderNowProgram(v) {
+  const st = v.state.status;
+  const actions = $("now-actions");
+  clear(actions);
+  $("question-box").hidden = true;
+  const title = (t, d) => { $("now-title").textContent = t; $("now-detail").textContent = d || ""; };
+  const start = () => act("start", {}, true);
+  const calls = programCalls(v);
+  const last = calls[calls.length - 1];
+  const moves = calls.filter((c) => c.capability === "workspace.place" && c.status === "succeeded").length;
+  $("now-progress").textContent = moves + " part" + (moves === 1 ? "" : "s") + " placed";
+  $("progress-bar").hidden = true;
+  const active = v.executor.active;
+  const crashed = !active && v.executor.last_exit_code === v.executor.simulated_crash_code;
+  const report = v.state.final_report || {};
+  const exps = report.expectations || [];
+  const powerCut = () => {
+    const counts = (v.workspace_truth && v.workspace_truth.effect_counts) || {};
+    act("sim", { control: "arm_fault", fault: { kind: "crash_after_effect", on: { capability: "workspace.place", nth: (counts["workspace.place"] || 0) + 1 } } }, true)
+      .then((ok) => { if (ok) toast("The power will fail right after the next part is put down."); });
+  };
+  $("change-box").hidden = ["completed", "partial", "stopped", "failed"].includes(st);
+  if (st === "created") {
+    setBadge("idle", "Ready");
+    title("Ready to run the program", "Press Start.");
+    actions.append(actionButton("Start", start, "big"));
+  } else if ((st === "running" || st === "paused") && crashed) {
+    setBadge("warn", "Power cut");
+    title("The power went out (simulated)", "Press Continue. It first checks what the last move actually did, then the program picks up exactly where it was. Nothing is done twice.");
+    actions.append(actionButton("Continue", start, "big"));
+  } else if (st === "running" && !active) {
+    setBadge("idle", "Not running");
+    title("Nothing is running right now", "Press Continue to carry on from where it stopped.");
+    actions.append(actionButton("Continue", start, "big"));
+  } else if (st === "running") {
+    setBadge("info", "Running");
+    title(last ? "Line " + last.line + ": " + describeCall(last) : "Checking and compiling the program", last ? "The highlighted line in the program below is running now." : "");
+    actions.append(actionButton("Simulate a power cut", powerCut, "ghost"), actionButton("Pause", () => act("pause"), "ghost"), actionButton("Stop", () => act("cancel"), "danger"));
+  } else if (st === "awaiting_human") {
+    setBadge("info", "Needs your decision");
+    const qn = v.questions.find((x) => x.status === "open" && x.goal_revision === v.goal_revision);
+    title("The program is asking you", "Nothing more will move until you answer.");
+    if (qn) {
+      $("question-box").hidden = false;
+      $("question-prompt").textContent = qn.prompt;
+      const opts = $("question-options");
+      clear(opts);
+      for (const o of qn.options) opts.append(actionButton(o.label, () => act("answer", { question_id: qn.question_id, choice: o.id })));
+    }
+    actions.append(actionButton("Stop", () => act("cancel"), "danger"));
+  } else if (st === "paused") {
+    setBadge("idle", "Paused");
+    title("Paused: nothing new will start", "Anything that was moving has finished and been checked.");
+    actions.append(actionButton("Continue", start, "big"), actionButton("Stop", () => act("cancel"), "danger"));
+  } else if (st === "blocked") {
+    setBadge("bad", "Stopped to check");
+    title("It stopped because it can't safely continue", v.state.status_reason || "");
+    actions.append(actionButton("Continue", start, "big"), actionButton("Stop", () => act("cancel"), "danger"));
+  } else if (st === "awaiting_planner") {
+    setBadge("violet", "Waiting");
+    title("Waiting for a program", v.state.status_reason || "");
+  } else if (st === "completed") {
+    setBadge("ok", "Done");
+    title("Done: all " + exps.length + " check" + (exps.length === 1 ? "" : "s") + " passed", "Each check was made by looking at the table, not by trusting the program. " + moves + " parts were placed.");
+  } else if (st === "partial") {
+    const failed = exps.filter((e) => !e.held);
+    setBadge("warn", "Done, but not everything");
+    title(failed.length + " of " + exps.length + " checks did not pass", failed.map((e) => "✗ " + e.description).join("  "));
+  } else if (st === "stopped") {
+    setBadge("idle", "Stopped");
+    title("Stopped as you asked", "Parts already moved stay where they are.");
+  } else if (st === "failed") {
+    setBadge("bad", "Could not finish");
+    title("It could not finish", v.state.status_reason || "");
+  }
+  if (["completed", "partial", "stopped", "failed"].includes(st)) {
+    actions.append(actionButton("New request", () => { newRequest(); window.scrollTo({ top: 0, behavior: "smooth" }); }, "ghost"));
+  }
+}
+
+function programStory(v) {
+  const events = v.events.slice().reverse();
+  const base = events.length ? events[0].at_ms : 0;
+  const lines = [];
+  const add = (text, cls, e) => lines.push({ text, cls, t: e ? ((e.at_ms - base) / 1000).toFixed(0) + "s" : "" });
+  for (const e of events) {
+    const m = e.message || "";
+    switch (e.kind) {
+      case "program_submitted": add(m.includes("first program") ? "You approved the program and started it." : "You asked for a change; a new program was approved.", "you", e); break;
+      case "program_built": { const b = (m.match(/\((\d+) bytes/) || [])[1]; add("Checked the program against the table and compiled it to machine code" + (b ? " (" + b + " bytes)." : "."), "", e); break; }
+      case "plan_rejected": add("The program no longer passes its checks for the table as it is now; nothing ran.", "alert", e); break;
+      case "plan_superseded": if (m.includes("goal revised")) add("Stopped the old program at a safe point; moves already made stay.", "", e); break;
+      case "action_rejected": add("A move could not be done: " + m.replace(/^L\d+\.\d+: /, "").replace(/; no effect$/, "") + ". Nothing moved.", "alert", e); break;
+      case "program_says": add("The program says: " + m, "", e); break;
+      case "expectation_held": add(m.replace(" (checked by looking at the table)", " (checked by looking)"), "", e); break;
+      case "expectation_failed": add(m, "alert", e); break;
+      case "question_asked": add("The program asked you: " + m.replace(/^question #\d+: /, ""), "you", e); break;
+      case "question_answered": add("You answered.", "you", e); break;
+      case "recovery_started": if (/; [1-9]\d* action/.test(m)) add("Power back: it first checked what the interrupted move had done, then the program continued from the same line.", "", e); break;
+      case "reconciled": if (m.includes("not repeated")) add("Checked: that move had already happened, so it was not repeated.", "", e); break;
+      case "control_requested": if (m.endsWith("pause")) add("You paused it.", "you", e); else if (m.endsWith("cancel")) add("You asked it to stop.", "you", e); break;
+      case "program_error": add("The program hit an error: " + m.replace(/^program #\d+ /, ""), "alert", e); break;
+      case "run_finished": add(m.startsWith("run completed") ? "Finished: every check passed, by looking at the table." : m.startsWith("run partial") ? "Finished, but not every check passed." : "Finished.", m.startsWith("run completed") ? "" : "alert", e); break;
+      default: break;
+    }
+  }
+  return lines;
+}
+
+async function writeRevision() {
+  const text = $("change-text").value.trim();
+  if (!text || !current) return toast("Say what should change.");
+  const card = $("revision-card");
+  const stop = writingState(card, "The AI is writing a new program from the table as it is now");
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  const where = () => ({ run_id: current });
+  try {
+    const r = await api("POST", "/api/programs/write", { text, run_id: current });
+    stop();
+    revision = Object.assign(r, { request: text });
+    renderReview(card, revision, {
+      title: "A new program for: “" + text + "”",
+      where,
+      runLabel: "Switch to this program",
+      onRun: async (rv) => {
+        const ok = await act("program", { program: { source: rv.source, explanation: rv.explanation || "", request: rv.request || text, author: rv.by || "", rehearsal: rv.rehearsal || null } });
+        if (ok) { card.hidden = true; $("change-text").value = ""; }
+      },
+      changeLabel: "Keep the current program",
+      onChangeWords: () => { card.hidden = true; },
+    });
+  } catch (e) {
+    stop();
+    clear(card);
+    card.append(h("p", { class: "diag" }, e.message), h("div", { class: "buttons" }, actionButton("Close", () => { card.hidden = true; }, "ghost")));
+  }
+}
+
+// ---- the robot arm (two joints; reaches for the place of the current move)
+
+const ARM = { bx: 470, by: 178, l1: 250, l2: 235 };
+let armCur = null; // set on first draw
+let armAnim = null;
+let armTargetKey = "";
+let layoutBoxes = {};
+
+function ik(tx, ty) {
+  const dx = tx - ARM.bx, dy = ty - ARM.by;
+  const d = Math.min(Math.max(Math.hypot(dx, dy), 40), ARM.l1 + ARM.l2 - 2);
+  const c2 = (d * d - ARM.l1 * ARM.l1 - ARM.l2 * ARM.l2) / (2 * ARM.l1 * ARM.l2);
+  const a2 = Math.acos(Math.max(-1, Math.min(1, c2)));
+  const a1 = Math.atan2(dy, dx) - Math.atan2(ARM.l2 * Math.sin(a2), ARM.l1 + ARM.l2 * Math.cos(a2));
+  return { a1, a2 };
+}
+
+function armPoints(a) {
+  const ex = ARM.bx + ARM.l1 * Math.cos(a.a1), ey = ARM.by + ARM.l1 * Math.sin(a.a1);
+  const tx = ex + ARM.l2 * Math.cos(a.a1 + a.a2), ty = ey + ARM.l2 * Math.sin(a.a1 + a.a2);
+  return { ex, ey, tx, ty };
+}
+
+function lastMove(v) {
+  const calls = v.program ? programCalls(v) : (v.steps || []).map((a) => ({ capability: a.capability, args: a.arguments, status: a.status }));
+  for (let i = calls.length - 1; i >= 0; i--) {
+    const c = calls[i];
+    if (c.capability === "workspace.pick" && c.status !== "failed") return { at: (c.args || {}).source_id, part: (c.args || {}).object_id };
+    if (c.capability === "workspace.place" && c.status !== "failed") return { at: (c.args || {}).destination_id, part: (c.args || {}).object_id };
+  }
+  return null;
+}
+
+function drawArm(svg, v) {
+  const mv = lastMove(v);
+  const box = mv && layoutBoxes[mv.at];
+  // Rest pose: folded above the base, inside the picture.
+  const target = box ? { x: box.x + box.w / 2, y: box.y + box.h / 2 + (box.y < ARM.by ? 12 : -10) } : { x: ARM.bx + 150, y: ARM.by - 40 };
+  const key = target.x + "," + target.y;
+  if (!armCur) {
+    armCur = ik(target.x, target.y); // first draw: no swing in from elsewhere
+    armTargetKey = key;
+  } else if (key !== armTargetKey) {
+    armTargetKey = key;
+    armAnim = { from: Object.assign({}, armCur), to: ik(target.x, target.y), t0: performance.now() };
+  }
+  for (const id of Object.keys(layoutBoxes)) {
+    const el = svg.querySelector('[data-slot="' + id + '"]');
+    if (el && mv && mv.at === id) el.classList.add("active");
+  }
+  const g = s("g", { id: "arm" });
+  g.append(s("circle", { cx: ARM.bx, cy: ARM.by, r: 22, class: "arm-base" }));
+  g.append(s("line", { id: "arm-l1", class: "arm-link" }), s("line", { id: "arm-l2", class: "arm-link" }), s("circle", { id: "arm-elbow", r: 9, class: "arm-joint" }));
+  const tip = s("g", { id: "arm-tip" });
+  tip.append(s("path", { d: "M -12 -14 L -12 6 M 12 -14 L 12 6 M -12 -14 L 12 -14", class: "arm-claw" }));
+  const held = (v.workspace_truth.locations.find((l) => l.loc_type === "gripper") || { objects: [] }).objects[0];
+  if (held) {
+    const shape = partShape(held.observed_kind === "unknown" ? "unknown" : held.kind, -9, -8, 9);
+    shape.append(s("title", {}, "in the arm: " + held.object_id));
+    tip.append(shape);
+  }
+  g.append(tip);
+  svg.append(g);
+  placeArm();
+}
+
+function placeArm() {
+  if (!armCur) return;
+  const p = armPoints(armCur);
+  const set = (id, attrs) => { const el = document.getElementById(id); if (el) for (const [k, val] of Object.entries(attrs)) el.setAttribute(k, val); };
+  set("arm-l1", { x1: ARM.bx, y1: ARM.by, x2: p.ex, y2: p.ey });
+  set("arm-l2", { x1: p.ex, y1: p.ey, x2: p.tx, y2: p.ty });
+  set("arm-elbow", { cx: p.ex, cy: p.ey });
+  set("arm-tip", { transform: "translate(" + p.tx.toFixed(1) + "," + p.ty.toFixed(1) + ")" });
+}
+
+function armLoop(now) {
+  if (armAnim) {
+    const t = Math.min(1, (now - armAnim.t0) / 550);
+    const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    armCur = { a1: armAnim.from.a1 + (armAnim.to.a1 - armAnim.from.a1) * e, a2: armAnim.from.a2 + (armAnim.to.a2 - armAnim.from.a2) * e };
+    placeArm();
+    if (t >= 1) armAnim = null;
+  }
+  requestAnimationFrame(armLoop);
+}
+requestAnimationFrame(armLoop);
 
 // ------------------------------------------------------------------ technical view
 
@@ -639,10 +1172,17 @@ function showMode() {
 
 // Exactly one start button on screen: the form's own button is hidden while the
 // "I understood ..." confirmation (which has its own) is shown.
+function isProgramStyle() { return $("style-select").value === "program"; }
+
 function syncStartButton() {
   const b = $("start-btn");
-  b.hidden = !$("interpretation").hidden;
-  b.textContent = $("new-request").value.trim() ? "Read my request" : "Start";
+  const program = isProgramStyle();
+  b.hidden = !program && !$("interpretation").hidden;
+  b.textContent = program ? "Write the program" : $("new-request").value.trim() ? "Read my request" : "Start";
+  $("examples").hidden = !program;
+  $("start-note").textContent = program
+    ? "The AI writes a program for your words (a few cents). Before you decide to run it, it is checked, compiled to machine code and rehearsed on a copy of the table."
+    : "Leave the box empty for the situation's usual request. Your own words are read by the AI (about a cent); you confirm what it understood before anything moves.";
 }
 function showInterpretation(on) {
   $("interpretation").hidden = !on;
@@ -674,11 +1214,22 @@ function render(v) {
   showMode();
   $("run-panels").hidden = false;
   const trayKit = trayKitMap(v);
-  renderNow(v, trayKit);
-  renderGoal(v);
-  renderKits(v, trayKit);
+  const isProgram = !!v.program;
+  $("kit-panels").hidden = isProgram;
+  $("run-program-card").hidden = !isProgram;
+  if (isProgram) {
+    renderNowProgram(v);
+    renderRunningProgram(v);
+  } else {
+    $("change-box").hidden = true;
+    $("revision-card").hidden = true;
+    renderNow(v, trayKit);
+    renderGoal(v);
+    renderKits(v, trayKit);
+  }
   drawWorkspace(v, trayKit);
-  renderStory(v, trayKit);
+  if (isProgram) renderStoryLines(programStory(v));
+  else renderStory(v, trayKit);
   if (!$("tech").hidden) renderTech(v);
 }
 
@@ -743,6 +1294,10 @@ function wire() {
   $("new-run").addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = $("new-request").value.trim();
+    if (isProgramStyle()) {
+      if (!text) { toast("Say what you want the robot to do, or pick an example."); $("new-request").focus(); return; }
+      return writeProgram(text);
+    }
     if (!text) return startRun(null);
     // Your own words: show what was understood first; nothing runs until you confirm.
     showInterpretation(true);
@@ -772,6 +1327,11 @@ function wire() {
     }
   });
   $("new-request").addEventListener("input", () => showInterpretation(false));
+  $("new-request").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("new-run").requestSubmit(); }
+  });
+  $("style-select").addEventListener("change", () => { showInterpretation(false); syncStartButton(); });
+  $("change-write").addEventListener("click", writeRevision);
   $("correct-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const comps = {};
@@ -795,7 +1355,11 @@ function wire() {
 (async function main() {
   wire();
   const m = /run=([A-Za-z0-9_-]+)/.exec(location.hash);
-  try { await loadScenarios(); await loadRuns(m ? m[1] : null); } catch (e) { toast("Server unavailable: " + e.message); }
+  try { await loadScenarios(); await loadExamples(); await loadRuns(m ? m[1] : null); } catch (e) { toast("Server unavailable: " + e.message); }
+  syncStartButton();
+  // Demo links: #example=<id> opens that example's checked and rehearsed program.
+  const ex = /example=([a-z0-9-]+)/.exec(location.hash);
+  if (ex && !m) { const e = examples.find((x) => x.id === ex[1]); if (e) checkExample(e); }
   poll();
   setInterval(poll, 700);
 })();

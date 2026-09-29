@@ -11,7 +11,7 @@
 <header class="top">
   <div class="brand">
     <h1>Revolve</h1>
-    <p class="sub">Kit assembly in a simulated workspace (no real robot)</p>
+    <p class="sub">Tell a robot arm what to do. The AI writes the program, the compiler checks it, then it runs (simulated arm, no real robot).</p>
   </div>
   <div class="runbar">
     <label class="inline">Previous runs <select id="run-select"></select></label>
@@ -32,16 +32,17 @@
       <span class="muted small">Previous runs stay listed at the top of the page.</span>
     </div>
     <div id="start-full">
-    <h2>Start a run</h2>
+    <h2>Tell the robot what to do</h2>
     <form id="new-run">
-      <label>Starting situation on the table
+      <label>What's on the table
         <select id="scenario-select"></select>
       </label>
       <p id="scenario-desc" class="muted"></p>
-      <label>What do you want? <span class="muted">(optional; leave empty for the situation's usual request)</span>
-        <input id="new-request" type="text" maxlength="500" placeholder="e.g. Put a red block and a washer in tray 4">
+      <label><span id="request-label">What do you want?</span>
+        <textarea id="new-request" rows="2" maxlength="800" placeholder="e.g. Sort the table: red blocks in tray 1, blue in tray 2, and everything else back in its bin."></textarea>
       </label>
-      <p class="muted small">Every run starts with a fresh table. Your own words are read by the AI (one small request, about a cent); you confirm what it understood before anything moves.</p>
+      <div id="examples" class="examples"></div>
+      <p class="muted small" id="start-note">The AI writes a program for your words (a few cents). Before you decide to run it, it is checked, compiled to machine code and rehearsed on a copy of the table.</p>
       <div id="interpretation" class="question" hidden>
         <p id="interp-title"></p>
         <p id="interp-detail" class="muted small"></p>
@@ -49,6 +50,12 @@
       </div>
       <details class="advanced">
         <summary>More options</summary>
+        <label>How the job is described
+          <select id="style-select">
+            <option value="program">The AI writes a program (new)</option>
+            <option value="steps">A checked list of steps (the earlier way)</option>
+          </select>
+        </label>
         <label>Who plans the steps
           <select id="planner-select">
             <option value="scripted">Built-in planner (free, works offline)</option>
@@ -64,10 +71,13 @@
         <label class="check"><input type="checkbox" id="scripted-human"> Answer questions automatically (for demos)</label>
         <label class="check"><input type="checkbox" id="show-all-scenarios"> Show test scenarios too</label>
       </details>
-      <button type="submit" id="start-btn" class="big">Start</button>
+      <button type="submit" id="start-btn" class="big">Write the program</button>
     </form>
     </div>
   </section>
+
+  <!-- A proposed program, before it runs -->
+  <section class="card program" id="program-card" hidden></section>
 
   <!-- Now -->
   <section class="card now" id="now-card" hidden>
@@ -83,11 +93,21 @@
       <div id="question-options" class="buttons"></div>
     </div>
     <div id="now-actions" class="buttons"></div>
+    <div id="change-box" class="change-box" hidden>
+      <label>Change what it's doing
+        <textarea id="change-text" rows="2" maxlength="800" placeholder="e.g. Actually, put the washers in tray 3 instead."></textarea>
+      </label>
+      <div class="buttons"><button type="button" id="change-write">Write a new program from here</button></div>
+      <p class="muted small">The AI writes a new program for the table as it is now. You see it, checked and rehearsed, before it takes over. Moves already made stay.</p>
+    </div>
     <p class="fineprint">Pause and Stop control the software only; they are not an emergency stop for real machinery.</p>
   </section>
 
   <div id="run-panels">
-  <div class="two">
+  <!-- The program being run -->
+  <section class="card program" id="run-program-card" hidden></section>
+  <section class="card program" id="revision-card" hidden></section>
+  <div class="two" id="kit-panels">
     <!-- Request -->
     <section class="card">
       <h2>Your request</h2>
@@ -123,7 +143,7 @@
     <h2>Workspace</h2>
     <svg id="workspace" viewBox="0 0 900 380" role="img" aria-label="Simulated workspace"></svg>
     <div class="legend small">
-      <span><i class="sw red"></i>red block</span><span><i class="sw blue"></i>blue block</span><span><i class="sw green"></i>green block</span><span><i class="sw washer"></i>washer</span><span><i class="sw unknown"></i>unidentified item</span><span><i class="sw hidden"></i>currently hidden from the system</span>
+      <span><i class="sw arm"></i>robot arm</span><span><i class="sw red"></i>red block</span><span><i class="sw blue"></i>blue block</span><span><i class="sw green"></i>green block</span><span><i class="sw washer"></i>washer</span><span><i class="sw unknown"></i>unidentified item</span><span><i class="sw hidden"></i>currently hidden from the system</span>
     </div>
   </section>
 

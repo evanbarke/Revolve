@@ -360,7 +360,12 @@ impl<'a> Checker<'a> {
     fn expr(&mut self, scope: &mut Scope, e: &Expr) -> Ty {
         match &e.kind {
             ExprKind::Int(_) => Ty::Int,
-            ExprKind::Str(_) => Ty::Str,
+            ExprKind::Str(s) => {
+                if self.env.places.iter().any(|p| &p.0 == s) {
+                    self.facts.places_named.insert(s.clone());
+                }
+                Ty::Str
+            }
             ExprKind::Bool(_) => Ty::Bool,
             ExprKind::None => Ty::NoneT,
             ExprKind::Name(n) => {

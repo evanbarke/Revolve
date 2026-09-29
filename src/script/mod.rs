@@ -47,6 +47,8 @@ pub struct Facts {
     pub effects: BTreeSet<String>,
     /// Destinations written literally in the program.
     pub literal_destinations: BTreeSet<String>,
+    /// Every place the program names anywhere (text that is a place id).
+    pub places_named: BTreeSet<String>,
     /// Some destinations are computed while running (each is checked before the move).
     pub dynamic_destinations: bool,
     /// Questions the program may ask (literal text).
@@ -88,6 +90,32 @@ pub fn compile(source: &str, env: &CheckEnv) -> Result<Compiled, Vec<Diag>> {
         imports: lowered.imports,
         facts,
         lines: source.lines().filter(|l| !l.trim().is_empty()).count(),
+    })
+}
+
+/// What the AI is told about the table: each place with what it holds, and the arm.
+pub fn table_summary(obs: &crate::model::Observation) -> serde_json::Value {
+    use crate::model::LocationType;
+    let places: Vec<serde_json::Value> = obs
+        .locations
+        .iter()
+        .filter(|l| matches!(l.loc_type, LocationType::Bin | LocationType::Tray | LocationType::Table))
+        .map(|l| {
+            let mut holds = std::collections::BTreeMap::<String, u32>::new();
+            for o in obs.objects_at(&l.location_id) {
+                *holds.entry(o.observed_kind.clone()).or_default() += 1;
+            }
+            let kind = match l.loc_type {
+                LocationType::Bin => "bin",
+                LocationType::Tray => "tray",
+                _ => "table",
+            };
+            serde_json::json!({"id": l.location_id, "kind": kind, "accepts": l.accepts_kind, "available": l.available, "holds": holds})
+        })
+        .collect();
+    serde_json::json!({
+        "places": places,
+        "arm_holds": obs.gripper_contents().map(|o| serde_json::json!({"id": o.object_id, "kind": o.observed_kind})),
     })
 }
 
