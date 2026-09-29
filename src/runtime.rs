@@ -2,15 +2,16 @@
 //!
 //! Loop (each iteration re-reads persisted state; nothing is trusted from memory
 //! across a crash):
-//!   control (cancel/pause) -> reconcile unsettled actions -> open questions ->
-//!   goal revision check -> plan (sync inventory, observe, ask planner, compile)
-//!   -> next action: fresh observation, precondition check, atomic claim,
-//!   dispatch through the gateway, settle (verify effects by observation).
+//!   reconcile unsettled actions -> control (cancel/pause) -> budgets ->
+//!   open questions -> goal revision check -> plan (sync inventory, observe, ask
+//!   planner, compile) -> next action: fresh observation, precondition check,
+//!   atomic claim, dispatch through the gateway, settle (verify by observation).
 //!
 //! Recovery is the same loop: on start it takes the owner lock, then reconciles
 //! every action whose outcome was not established (status lookup first, then
 //! observation) before anything new is dispatched.
 
+use crate::bookkeeping::{self, is_hold};
 use crate::capability::{self, Completion, EffectClass};
 use crate::compiler::{self, CompileContext, DiagCategory, Diagnostic, Limits};
 use crate::gateway::{DispatchOutcome, Gateway, HumanHook};
@@ -54,6 +55,7 @@ enum Episode {
     Planned,
     Rest(&'static str, String),
     Finish(Option<&'static str>, String),
+    /// Something changed underneath (correction, pause, cancel): re-run the loop.
     Restart,
 }
 
@@ -177,15 +179,17 @@ fn holds_in(obs: &Observation, classes: &[Classification], c: &Condition, rev: u
     }
 }
 
-/// Postconditions implied by a contract (in addition to any the plan declares).
-fn implied_postconditions(capability: &str, args: &Value) -> Vec<Condition> {
+/// Effect conditions that can be verified by observation: the contract's implied
+/// postconditions plus the step's declared ones, excluding non-physical conditions
+/// (a goal revision is not an effect and must never decide whether an effect happened).
+fn effect_conditions(capability: &str, args: &Value, step: Option<&Step>) -> Vec<Condition> {
     let s = |k: &str| {
         args.get(k)
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string()
     };
-    match capability {
+    let mut v = match capability {
         "workspace.pick" => vec![Condition::GripperHolds {
             object_id: s("object_id"),
         }],
@@ -194,7 +198,16 @@ fn implied_postconditions(capability: &str, args: &Value) -> Vec<Condition> {
             location_id: s("destination_id"),
         }],
         _ => vec![],
+    };
+    if let Some(st) = step {
+        v.extend(
+            st.postconditions
+                .iter()
+                .filter(|c| !matches!(c, Condition::GoalRevisionEquals { .. }))
+                .cloned(),
+        );
     }
+    v
 }
 
 fn all_hold(obs: &Observation, classes: &[Classification], conds: &[Condition], rev: u32) -> Tri {
@@ -251,6 +264,12 @@ impl Executor {
         self.store.classifications().unwrap_or_default()
     }
 
+    fn block(&mut self, reason: &str) -> Result<String> {
+        self.store.set_status(R_BLOCKED, Some(reason))?;
+        self.event("blocked", &format!("blocked: {reason}"), None, None)?;
+        Ok(R_BLOCKED.into())
+    }
+
     // ------------------------------------------------------------------ main loop
 
     pub fn run(&mut self) -> Result<String> {
@@ -259,7 +278,6 @@ impl Executor {
             self.say(&format!("run already finished: {}", st.status));
             return Ok(st.status);
         }
-        let meta = self.store.meta()?;
         if st.status == R_CREATED {
             self.event(
                 "executor_started",
@@ -280,41 +298,23 @@ impl Executor {
                 None,
             )?;
         }
-        if st.control == "pause" {
-            self.store.request_control("run")?;
+        // A scripted human action whose delivery a crash interrupted is delivered now.
+        if let Some(h) = self.hook.as_deref_mut() {
+            crate::gateway::deliver_pending_human_actions(&mut self.world, &mut self.store, h)?;
         }
+        // Resuming clears a pause, never a cancel.
+        self.store.resume_from_pause()?;
         self.store.set_status(R_RUNNING, None)?;
-        let _ = meta;
         let run_started = Instant::now();
         let prior_active = st.active_ms;
         loop {
-            let st = self.store.state()?;
-            // Budgets (runtime-owned; plans can only lower them).
-            let dispatched = self
-                .store
-                .actions()?
-                .iter()
-                .filter(|a| a.op_key.is_some())
-                .count() as u32;
-            if dispatched >= self.opts.limits.max_actions {
-                return self.finalize(
-                    Some(R_FAILED),
-                    format!("action budget exhausted ({dispatched} dispatches)"),
-                );
-            }
-            if (prior_active + run_started.elapsed().as_millis() as i64) as u64
-                > self.opts.limits.max_elapsed_ms
-            {
-                return self.finalize(Some(R_FAILED), "elapsed-time budget exhausted".into());
-            }
-            if st.control == "cancel" {
-                return self.finish_cancel();
-            }
             // Establish the outcome of anything in flight before doing anything else.
             if let Some(reason) = self.reconcile_all()? {
-                self.store.set_status(R_BLOCKED, Some(&reason))?;
-                self.event("blocked", &format!("blocked: {reason}"), None, None)?;
-                return Ok(R_BLOCKED.into());
+                return self.block(&reason);
+            }
+            let st = self.store.state()?;
+            if st.control == "cancel" {
+                return self.finish_cancel();
             }
             if st.control == "pause" {
                 self.store.set_status(
@@ -322,6 +322,28 @@ impl Executor {
                     Some("paused by human; no new actions will be dispatched"),
                 )?;
                 return Ok(R_PAUSED.into());
+            }
+            // Budgets (runtime-owned; plans can only lower them).
+            let dispatched = self
+                .store
+                .actions()?
+                .iter()
+                .filter(|a| a.op_key.is_some())
+                .count() as u32;
+            let budget_reason = if dispatched >= self.opts.limits.max_actions {
+                Some(format!("action budget exhausted ({dispatched} dispatches)"))
+            } else if (prior_active + run_started.elapsed().as_millis() as i64) as u64
+                > self.opts.limits.max_elapsed_ms
+            {
+                Some("elapsed-time budget exhausted".to_string())
+            } else {
+                None
+            };
+            if let Some(reason) = budget_reason {
+                match self.finalize(Some(R_FAILED), reason)? {
+                    Some(s) => return Ok(s),
+                    None => continue,
+                }
             }
             let (rev, _goal) = self.store.current_goal()?;
             if let Some(q) = self
@@ -351,7 +373,10 @@ impl Executor {
                         self.store.set_status(status, Some(&reason))?;
                         return Ok(status.into());
                     }
-                    Episode::Finish(forced, reason) => return self.finalize(forced, reason),
+                    Episode::Finish(forced, reason) => match self.finalize(forced, reason)? {
+                        Some(s) => return Ok(s),
+                        None => continue,
+                    },
                 }
             };
             let actions = self.store.plan_actions(plan.plan_seq)?;
@@ -360,18 +385,19 @@ impl Executor {
                 .find(|a| a.status == A_PENDING || a.status == A_RETRY_PENDING)
                 .cloned()
             else {
-                self.store.set_plan_status(plan.plan_seq, "finished")?;
-                return self.finalize(None, format!("plan #{} finished", plan.plan_seq));
+                match self.finalize(None, format!("plan #{} finished", plan.plan_seq))? {
+                    Some(s) => {
+                        self.store.set_plan_status(plan.plan_seq, "finished")?;
+                        return Ok(s);
+                    }
+                    None => continue,
+                }
             };
             match self.execute(&next, &actions)? {
                 Next::Continue => {}
                 Next::Hold => continue,
                 Next::Replan(reason) => self.supersede_plan(plan.plan_seq, &reason)?,
-                Next::Blocked(reason) => {
-                    self.store.set_status(R_BLOCKED, Some(&reason))?;
-                    self.event("blocked", &format!("blocked: {reason}"), None, None)?;
-                    return Ok(R_BLOCKED.into());
-                }
+                Next::Blocked(reason) => return self.block(&reason),
             }
             if self.opts.step_delay_ms > 0 {
                 std::thread::sleep(Duration::from_millis(self.opts.step_delay_ms));
@@ -399,12 +425,13 @@ impl Executor {
                     .set_action_status(a.action_id, A_SUPERSEDED, None, Some(reason))?;
                 n += 1;
             } else if a.status == A_RETRY_PENDING {
-                // No effect was established for this key; v0 adapters are synchronous, so the key is retired.
+                // Its key must not be retired on belief alone: the next reconciliation
+                // looks the key up and only then settles it (never re-dispatched here).
                 self.store.set_action_status(
                     a.action_id,
-                    A_FAILED,
+                    A_OUTCOME_UNKNOWN,
                     None,
-                    Some("no effect established; superseded before retry"),
+                    Some("superseded before retry; outcome to be re-established by status lookup"),
                 )?;
                 n += 1;
             }
@@ -425,12 +452,14 @@ impl Executor {
     // ------------------------------------------------------------------ reconciliation
 
     fn reconcile_all(&mut self) -> Result<Option<String>> {
+        let active_seq = self.active_plan()?.map(|p| p.plan_seq);
         let mut unresolved = vec![];
         for a in self.store.unsettled_actions()? {
-            if a.status == A_RETRY_PENDING {
+            // A same-key retry that belongs to the active plan is dispatched by the loop.
+            if a.status == A_RETRY_PENDING && a.plan_seq.is_some() && a.plan_seq == active_seq {
                 continue;
             }
-            if let Recon::Unresolved(r) = self.reconcile_one(&a)? {
+            if let Recon::Unresolved(r) = self.reconcile_one(&a, active_seq)? {
                 unresolved.push(r);
             }
         }
@@ -451,7 +480,7 @@ impl Executor {
         })
     }
 
-    fn reconcile_one(&mut self, a: &ActionRow) -> Result<Recon> {
+    fn reconcile_one(&mut self, a: &ActionRow, active_seq: Option<i64>) -> Result<Recon> {
         let Some(contract) = capability::lookup(&a.capability) else {
             return Ok(Recon::Unresolved(format!(
                 "action {} uses unknown capability {}",
@@ -469,16 +498,15 @@ impl Executor {
         let block_on_unknown = step
             .as_ref()
             .is_some_and(|s| s.on_unknown_outcome == crate::ir::UnknownOutcomePolicy::Block);
+        // Only an action of the active plan can still be re-dispatched; anything else is settled.
+        let will_redispatch = a.plan_seq.is_some() && a.plan_seq == active_seq;
         let label = format!(
             "action {} ({} {}, key {op_key})",
             a.action_id,
             a.capability,
             crate::util::canonical_json(&args)
         );
-        let mut posts = implied_postconditions(&a.capability, &args);
-        if let Some(s) = &step {
-            posts.extend(s.postconditions.iter().cloned());
-        }
+        let posts = effect_conditions(&a.capability, &args, step.as_ref());
         let rev = self.store.state()?.goal_revision;
 
         let status = if contract.status_lookup {
@@ -576,7 +604,10 @@ impl Executor {
                         "{label}: no receipt, and the step requires a human decision before any retry"
                     )));
                 }
-                if contract.safe_to_redispatch_same_key() && a.attempts < max_attempts {
+                if will_redispatch
+                    && contract.safe_to_redispatch_same_key()
+                    && a.attempts < max_attempts
+                {
                     self.store.set_action_status(
                         a.action_id,
                         A_RETRY_PENDING,
@@ -585,15 +616,16 @@ impl Executor {
                     )?;
                     self.event("reconciled", &format!("reconciled {label}: no receipt, so no effect under this key; will retry with the same key"), Some(a.action_id), None)?;
                 } else {
-                    self.store.set_action_status(
-                        a.action_id,
-                        A_FAILED,
-                        None,
-                        Some("no receipt; retry budget exhausted"),
-                    )?;
+                    let why = if will_redispatch {
+                        "no receipt; retry budget exhausted"
+                    } else {
+                        "no receipt (confirmed by status lookup); not part of the active plan, key retired"
+                    };
+                    self.store
+                        .set_action_status(a.action_id, A_FAILED, None, Some(why))?;
                     self.event(
                         "reconciled",
-                        &format!("reconciled {label}: no effect; retry budget exhausted"),
+                        &format!("reconciled {label}: no effect; {why}"),
                         Some(a.action_id),
                         None,
                     )?;
@@ -602,7 +634,6 @@ impl Executor {
             }
             StatusResult::Unavailable { message } => {
                 if contract.effect_class == EffectClass::PhysicalUncertain {
-                    // Fall back to observation.
                     let obs = match self.observe() {
                         Ok(o) => o,
                         Err(e) => {
@@ -618,11 +649,20 @@ impl Executor {
                             return Ok(Recon::Settled);
                         }
                         Tri::No(_)
-                            if contract.safe_to_redispatch_same_key()
+                            if will_redispatch
+                                && contract.safe_to_redispatch_same_key()
                                 && !block_on_unknown
                                 && a.attempts < max_attempts =>
                         {
-                            self.store.set_action_status(a.action_id, A_RETRY_PENDING, None, Some("effect not observed; same-key retry is safe (idempotent adapter)"))?;
+                            // Retry under the SAME key only; the key is never retired on this evidence.
+                            self.store.set_action_status(
+                                a.action_id,
+                                A_RETRY_PENDING,
+                                None,
+                                Some(
+                                    "effect not observed, status unconfirmed; same-key retry only",
+                                ),
+                            )?;
                             self.event("reconciled", &format!("reconciled {label}: status unavailable, effect not observed; same-key retry is safe"), Some(a.action_id), None)?;
                             return Ok(Recon::Settled);
                         }
@@ -650,18 +690,6 @@ impl Executor {
                 )))
             }
         }
-    }
-
-    // ------------------------------------------------------------------ bookkeeping
-
-    fn sync_inventory(&mut self, obs: &Observation) -> Result<Option<String>> {
-        crate::bookkeeping::sync_inventory(
-            &mut self.store,
-            &mut self.world,
-            &self.policy,
-            obs,
-            false,
-        )
     }
 
     // ------------------------------------------------------------------ planning
@@ -713,7 +741,16 @@ impl Executor {
                 ));
             }
         };
-        if let Some(reason) = self.sync_inventory(&obs)? {
+        if let Some(reason) = bookkeeping::sync_inventory(
+            &mut self.store,
+            &mut self.world,
+            &self.policy,
+            &obs,
+            false,
+        )? {
+            if is_hold(&reason) {
+                return Ok(Episode::Restart);
+            }
             return Ok(Episode::Rest(R_BLOCKED, reason));
         }
         // Re-observe after bookkeeping so the plan's basis is current.
@@ -731,6 +768,9 @@ impl Executor {
         let mut feedback: Vec<Diagnostic> = vec![];
         for _attempt in 0..=self.opts.limits.max_repairs_per_episode {
             let st = self.store.state()?;
+            if st.control != "run" || st.goal_revision != rev {
+                return Ok(Episode::Restart);
+            }
             if st.planner_decisions >= self.opts.limits.max_planner_decisions {
                 return Ok(Episode::Finish(
                     Some(R_FAILED),
@@ -862,13 +902,18 @@ impl Executor {
                         }];
                         continue;
                     }
-                    let qid = self
-                        .store
-                        .ask(rev, &c.kind, &c.prompt, &c.options, &c.context)?;
-                    return Ok(Episode::Rest(
-                        R_AWAITING_HUMAN,
-                        format!("question #{qid}: {}", c.prompt),
-                    ));
+                    return Ok(
+                        match self
+                            .store
+                            .ask(rev, &c.kind, &c.prompt, &c.options, &c.context)?
+                        {
+                            Some(qid) => Episode::Rest(
+                                R_AWAITING_HUMAN,
+                                format!("question #{qid}: {}", c.prompt),
+                            ),
+                            None => Episode::Restart,
+                        },
+                    );
                 }
                 Ok(PlannerResponse::Plan(raw)) => {
                     let parsed = compiler::parse_proposal(&raw);
@@ -1048,9 +1093,9 @@ impl Executor {
                     )));
                 }
                 Tri::No(why) => {
-                    let mut posts = implied_postconditions(&a.capability, &args);
-                    posts.extend(step.postconditions.iter().cloned());
+                    let posts = effect_conditions(&a.capability, &args, Some(&step));
                     if contract.effect_class == EffectClass::PhysicalUncertain
+                        && !posts.is_empty()
                         && matches!(all_hold(&obs, &classes, &posts, rev), Tri::Yes)
                     {
                         self.store.set_action_status(
@@ -1146,8 +1191,7 @@ impl Executor {
                         Some(&receipt),
                         None,
                     )?;
-                    let mut posts = implied_postconditions(&a.capability, args);
-                    posts.extend(step.postconditions.iter().cloned());
+                    let posts = effect_conditions(&a.capability, args, Some(step));
                     let obs = match self.observe() {
                         Ok(o) => o,
                         Err(e) => {
@@ -1254,32 +1298,28 @@ impl Executor {
                     None,
                 )?;
                 let row = self.store.action(a.action_id)?;
-                match self.reconcile_one(&row)? {
+                let active_seq = self.active_plan()?.map(|p| p.plan_seq);
+                match self.reconcile_one(&row, active_seq)? {
                     Recon::Settled => Ok(Next::Continue),
                     Recon::Unresolved(r) => Ok(Next::Blocked(r)),
                 }
             }
             DispatchOutcome::Adapter(AdapterOutcome::Unavailable { message }) => {
+                // By contract, "unavailable" means the request was not accepted: no effect.
                 let row = self.store.action(a.action_id)?;
                 let max_attempts = step.retry.max_attempts.clamp(1, 3) as i64;
+                self.store.set_action_status(
+                    a.action_id,
+                    A_RETRY_PENDING,
+                    None,
+                    Some(&format!(
+                        "adapter unavailable, request not accepted: {message}"
+                    )),
+                )?;
                 if contract.safe_to_redispatch_same_key() && row.attempts < max_attempts {
-                    self.store.set_action_status(
-                        a.action_id,
-                        A_RETRY_PENDING,
-                        None,
-                        Some(&format!(
-                            "adapter unavailable, request not accepted: {message}"
-                        )),
-                    )?;
                     std::thread::sleep(Duration::from_millis(100));
                     Ok(Next::Continue)
                 } else {
-                    self.store.set_action_status(
-                        a.action_id,
-                        A_RETRY_PENDING,
-                        None,
-                        Some(&format!("adapter unavailable: {message}")),
-                    )?;
                     Ok(Next::Blocked(format!(
                         "{}: adapter unavailable ({message}); resume when it is available",
                         step.step_id
@@ -1317,26 +1357,31 @@ impl Executor {
         Ok(Some(v))
     }
 
-    fn finalize(&mut self, forced: Option<&str>, reason: String) -> Result<String> {
-        if let Some(e) = crate::bookkeeping::settle_inventory(
-            &mut self.store,
-            &mut self.world,
-            &self.policy,
-            false,
-        )? {
-            self.event("cleanup_failed", &e, None, None)?;
-        }
+    /// Verify, settle bookkeeping and commit the terminal state atomically.
+    /// Returns None when a correction, pause or cancel arrived meanwhile: the loop
+    /// then handles it instead of finishing against a stale goal.
+    fn finalize(&mut self, forced: Option<&str>, reason: String) -> Result<Option<String>> {
         if let Some(r) = self.reconcile_all()? {
-            self.store.set_status(R_BLOCKED, Some(&r))?;
-            return Ok(R_BLOCKED.into());
+            return self.block(&r).map(Some);
+        }
+        let st = self.store.state()?;
+        if st.control != "run" {
+            return Ok(None);
+        }
+        let rev = st.goal_revision;
+        if let Some(e) =
+            bookkeeping::settle_inventory(&mut self.store, &mut self.world, &self.policy, false)?
+        {
+            if is_hold(&e) {
+                return Ok(None);
+            }
+            self.event("cleanup_failed", &e, None, None)?;
         }
         let (_, goal) = self.store.current_goal()?;
         let Some(mut report) = self.build_report("pending", &reason)? else {
-            self.store.set_status(
-                R_BLOCKED,
-                Some("cannot observe the workspace to verify the result"),
-            )?;
-            return Ok(R_BLOCKED.into());
+            return self
+                .block("cannot observe the workspace to verify the result")
+                .map(Some);
         };
         let n = report["kits_verified_complete"]
             .as_array()
@@ -1348,8 +1393,18 @@ impl Executor {
             None => R_PARTIAL,
         };
         report["status"] = json!(status);
-        self.store.set_final_report(&report)?;
-        self.store.set_status(status, Some(&reason))?;
+        if !self
+            .store
+            .finish_run(rev, &["run"], status, &reason, Some(&report))?
+        {
+            self.event(
+                "finalize_deferred",
+                "a correction, pause or cancel arrived while finishing; re-evaluating",
+                None,
+                None,
+            )?;
+            return Ok(None);
+        }
         let missing = report["missing_to_finish"].clone();
         self.event(
             "run_finished",
@@ -1357,46 +1412,45 @@ impl Executor {
             None,
             Some(report),
         )?;
-        Ok(status.into())
+        Ok(Some(status.into()))
     }
 
     fn finish_cancel(&mut self) -> Result<String> {
         let n = self.store.invalidate_pending(A_CANCELLED)?;
+        // Leave no same-key retries attached to an active plan: they are reconciled below.
+        if let Some(p) = self.active_plan()? {
+            self.supersede_plan(p.plan_seq, "cancelled by human")?;
+        }
         self.event("cancel_processing", &format!("cancel request: {n} undispatched action(s) cancelled; establishing in-flight outcomes"), None, None)?;
         if let Some(reason) = self.reconcile_all()? {
-            self.store.set_status(
-                R_BLOCKED,
-                Some(&format!(
-                    "cancel requested but an in-flight outcome is unknown: {reason}"
-                )),
-            )?;
-            return Ok(R_BLOCKED.into());
+            return self.block(&format!(
+                "cancel requested but an in-flight outcome is unknown: {reason}"
+            ));
         }
-        if let Some(p) = self.active_plan()? {
-            self.store.set_plan_status(p.plan_seq, "superseded")?;
-            self.store.set_active_plan(None)?;
-        }
-        if let Some(e) = crate::bookkeeping::settle_inventory(
-            &mut self.store,
-            &mut self.world,
-            &self.policy,
-            true,
-        )? {
+        if let Some(e) =
+            bookkeeping::settle_inventory(&mut self.store, &mut self.world, &self.policy, true)?
+        {
             self.event("cleanup_failed", &e, None, None)?;
         }
         let report = self.build_report(R_STOPPED, "stopped by human cancel")?;
-        if let Some(r) = &report {
-            self.store.set_final_report(r)?;
-        }
-        self.store.set_status(
+        let rev = self.store.state()?.goal_revision;
+        self.store.finish_run(
+            rev,
+            &["cancel"],
             R_STOPPED,
-            Some("stopped by human cancel; effects that already happened remain"),
+            "stopped by human cancel; effects that already happened remain",
+            report.as_ref(),
         )?;
         let kits = report
             .as_ref()
             .and_then(|r| r["kits_verified_complete"].as_array().map(|a| a.len()))
             .unwrap_or(0);
-        self.event("cancel_acknowledged", &format!("cancel acknowledged: run stopped with {kits} kit(s) verified complete; completed effects remain in the workspace"), None, report)?;
+        self.event(
+            "cancel_acknowledged",
+            &format!("cancel acknowledged: run stopped with {kits} kit(s) verified complete; completed effects remain in the workspace"),
+            None,
+            report,
+        )?;
         Ok(R_STOPPED.into())
     }
 }

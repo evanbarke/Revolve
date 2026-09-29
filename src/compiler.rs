@@ -261,6 +261,16 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
                 format!("`{}` cannot be used as a plan step", s.capability),
             ));
         }
+        for (ci, pc) in s.postconditions.iter().enumerate() {
+            if matches!(pc, Condition::GoalRevisionEquals { .. }) {
+                d.push(diag(
+                    DiagCategory::Schema,
+                    sid,
+                    format!("{path}.postconditions[{ci}]"),
+                    "goal_revision_equals is not an observable effect; use it as a precondition",
+                ));
+            }
+        }
         if s.capability_version != c.version {
             d.push(diag(
                 DiagCategory::Schema,

@@ -212,7 +212,41 @@ impl<'a> Gateway<'a> {
             && let Some(h) = self.hook.as_deref_mut()
         {
             h.on_due(store, &fired);
+            let ids: Vec<i64> = fired.iter().map(|f| f.fault_id).collect();
+            if let Err(e) = self.world.mark_delivered(&ids) {
+                let _ = store.event(
+                    "harness_error",
+                    &format!("could not mark human actions delivered: {e}"),
+                    None,
+                    None,
+                );
+            }
         }
         DispatchOutcome::Adapter(outcome)
     }
+}
+
+/// Deliver scripted human actions that fired but were never delivered (a crash
+/// right after the triggering effect). Called by executors at start-up.
+pub fn deliver_pending_human_actions(
+    world: &mut SimWorld,
+    store: &mut RunStore,
+    hook: &mut dyn HumanHook,
+) -> crate::util::Result<()> {
+    let pending = world.undelivered_human_actions()?;
+    if pending.is_empty() {
+        return Ok(());
+    }
+    store.event(
+        "human_actions_redelivered",
+        &format!(
+            "{} scripted human action(s) fired before a crash are delivered now",
+            pending.len()
+        ),
+        None,
+        None,
+    )?;
+    hook.on_due(store, &pending);
+    let ids: Vec<i64> = pending.iter().map(|f| f.fault_id).collect();
+    world.mark_delivered(&ids)
 }

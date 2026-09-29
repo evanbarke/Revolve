@@ -140,6 +140,10 @@ fn handle(ctx: &Ctx, mut req: Request) {
     let url = req.url().to_string();
     let path = url.split('?').next().unwrap_or("").to_string();
     let method = req.method().clone();
+    // DNS-rebinding guard for every request, reads included: only loopback Host names.
+    if !get_header(&req, "Host").is_some_and(is_loopback_authority) {
+        return json_resp(req, 403, &json!({"error": "unexpected Host header"}));
+    }
     if method == Method::Get {
         match path.as_str() {
             "/" | "/index.html" => {
@@ -222,6 +226,15 @@ fn list_runs(ctx: &Ctx) -> Result<Value> {
 fn create(ctx: &Ctx, body: &str) -> Result<Value> {
     let v: Value = serde_json::from_str(body)?;
     let name = v["scenario"].as_str().unwrap_or("nominal");
+    // A scenario is chosen by name only; never by path.
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        crate::bail!("invalid scenario name");
+    }
     let arm = Arm::parse(v["arm"].as_str().unwrap_or("revolve"))?;
     let mut sc = Scenario::load(&scenario::resolve(name, &ctx.scenarios_dir)?)?;
     // Optional goal override from the UI (structured form or restricted-grammar text).
@@ -478,6 +491,22 @@ fn run_view(ctx: &Ctx, run_id: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loopback_authority_parsing() {
+        for ok in ["127.0.0.1:8080", "localhost:1", "[::1]:8080", "localhost"] {
+            assert!(is_loopback_authority(ok), "{ok}");
+        }
+        for bad in [
+            "evil.example:8080",
+            "127.0.0.1.evil.example:80",
+            "10.0.0.1:8080",
+            "[::2]:80",
+            "",
+        ] {
+            assert!(!is_loopback_authority(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn only_loopback_binds_are_accepted() {

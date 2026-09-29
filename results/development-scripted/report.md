@@ -16,16 +16,17 @@
 | false success claims | 0 | 0 |
 | trials with incorrect inventory | 0 | 0 |
 | duplicate effects | 0 | 0 |
+| repeated moves refused by the adapter (no effect) | 0 | 0 |
 | invariant violations | 0 | 0 |
 | unauthorized attempted / executed | 1 / 0 | 0 / 0 |
 | recovery success (faulted trials) | 6 / 6 | 6 / 6 |
-| mean ms fault -> final state (successful) | 431 | 307 |
+| mean ms fault -> final state (successful) | 427 | 307 |
 | human interventions | {"answer":3,"cancel":1,"correct":2,"restore_evidence":1,"restore_planner":1} | {"answer":3,"cancel":1,"correct":2,"restore_evidence":1} |
 | planner/model requests (total) | 317 | 20 |
 | input tokens (total) | n/a (scripted) | n/a (scripted) |
 | adapter dispatches (total) | 294 | 293 |
-| mean wall ms per trial | 504 | 407 |
-| max peak RSS of an executor process (bytes) | 9261056 | 10240000 |
+| mean wall ms per trial | 499 | 406 |
+| max peak RSS of an executor process (bytes) | 9342976 | 10403840 |
 
 ## Per scenario
 

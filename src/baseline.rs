@@ -159,42 +159,47 @@ impl Baseline {
             None,
             None,
         )?;
-        if st.control == "pause" {
-            store.request_control("run")?;
+        if let Some(h) = self.hook.as_deref_mut() {
+            crate::gateway::deliver_pending_human_actions(world, store, h)?;
         }
+        // Resuming clears a pause, never a cancel.
+        store.resume_from_pause()?;
         store.set_status(R_RUNNING, None)?;
         let started = Instant::now();
         loop {
             let st = store.state()?;
+            if st.control == "cancel" {
+                return self.cancel(store, world);
+            }
             let dispatched = store
                 .actions()?
                 .iter()
                 .filter(|a| a.op_key.is_some())
                 .count() as u32;
-            if dispatched >= self.opts.limits.max_actions
+            let budget = if dispatched >= self.opts.limits.max_actions
                 || st.planner_decisions >= max_agent_turns(&self.opts.limits)
             {
-                return self.finish(
-                    store,
-                    world,
-                    R_FAILED,
-                    vec![],
-                    "action or agent-turn budget exhausted".into(),
-                );
-            }
-            if (st.active_ms + started.elapsed().as_millis() as i64) as u64
+                Some("action or agent-turn budget exhausted")
+            } else if (st.active_ms + started.elapsed().as_millis() as i64) as u64
                 > self.opts.limits.max_elapsed_ms
             {
-                return self.finish(
+                Some("elapsed-time budget exhausted")
+            } else {
+                None
+            };
+            if let Some(why) = budget {
+                match self.finish(
                     store,
                     world,
+                    st.goal_revision,
+                    &["run"],
                     R_FAILED,
                     vec![],
-                    "elapsed-time budget exhausted".into(),
-                );
-            }
-            if st.control == "cancel" {
-                return self.cancel(store, world);
+                    why.into(),
+                )? {
+                    Some(s) => return Ok(s),
+                    None => continue,
+                }
             }
             if st.control == "pause" {
                 store.set_status(R_PAUSED, Some("paused by human"))?;
@@ -296,12 +301,14 @@ impl Baseline {
                     )?;
                 }
                 Ok(AgentDecision::Ask(c)) => {
-                    let qid = store.ask(rev, &c.kind, &c.prompt, &c.options, &c.context)?;
-                    store.set_status(
-                        R_AWAITING_HUMAN,
-                        Some(&format!("question #{qid}: {}", c.prompt)),
-                    )?;
-                    return Ok(R_AWAITING_HUMAN.into());
+                    // None: the goal changed meanwhile; re-evaluate instead of asking a stale question.
+                    if let Some(qid) = store.ask(rev, &c.kind, &c.prompt, &c.options, &c.context)? {
+                        store.set_status(
+                            R_AWAITING_HUMAN,
+                            Some(&format!("question #{qid}: {}", c.prompt)),
+                        )?;
+                        return Ok(R_AWAITING_HUMAN.into());
+                    }
                 }
                 Ok(AgentDecision::Finish(report)) => {
                     let status = match report.status.as_str() {
@@ -310,7 +317,18 @@ impl Baseline {
                         "blocked" => R_BLOCKED,
                         _ => R_FAILED,
                     };
-                    return self.finish(store, world, status, report.kits_complete, report.message);
+                    match self.finish(
+                        store,
+                        world,
+                        rev,
+                        &["run"],
+                        status,
+                        report.kits_complete,
+                        report.message,
+                    )? {
+                        Some(s) => return Ok(s),
+                        None => continue,
+                    }
                 }
                 Ok(AgentDecision::Status { op_key }) => {
                     let cap = store
@@ -479,13 +497,18 @@ impl Baseline {
         if let Some(e) = crate::bookkeeping::settle_inventory(store, world, &self.policy, true)? {
             store.event("cleanup_failed", &e, None, None)?;
         }
-        let r = self.finish(
-            store,
-            world,
-            R_STOPPED,
-            vec![],
-            "stopped by human cancel".into(),
-        )?;
+        let rev = store.state()?.goal_revision;
+        let r = self
+            .finish(
+                store,
+                world,
+                rev,
+                &["cancel"],
+                R_STOPPED,
+                vec![],
+                "stopped by human cancel".into(),
+            )?
+            .unwrap_or_else(|| R_STOPPED.into());
         store.event(
             "cancel_acknowledged",
             "cancel acknowledged: agent stopped; completed effects remain",
@@ -495,14 +518,19 @@ impl Baseline {
         Ok(r)
     }
 
+    /// Record the agent's claim as the terminal state, atomically with respect to
+    /// late corrections/pauses/cancels. Returns None if one arrived (re-evaluate).
+    #[allow(clippy::too_many_arguments)]
     fn finish(
         &mut self,
         store: &mut RunStore,
         world: &mut SimWorld,
+        expected_rev: u32,
+        allowed_controls: &[&str],
         status: &str,
         claimed: Vec<String>,
         message: String,
-    ) -> Result<String> {
+    ) -> Result<Option<String>> {
         let (rev, goal) = store.current_goal()?;
         // Observation-based view for the UI, clearly separated from the agent's own claim.
         let obs = {
@@ -537,8 +565,21 @@ impl Baseline {
             );
             report["observed_view_not_used_for_claims"] = serde_json::to_value(v)?;
         }
-        store.set_final_report(&report)?;
-        store.set_status(status, Some(&message))?;
+        if !store.finish_run(
+            expected_rev,
+            allowed_controls,
+            status,
+            &message,
+            Some(&report),
+        )? {
+            store.event(
+                "finalize_deferred",
+                "a correction, pause or cancel arrived while finishing; re-evaluating",
+                None,
+                None,
+            )?;
+            return Ok(None);
+        }
         store.event(
             "run_finished",
             &format!(
@@ -555,6 +596,6 @@ impl Baseline {
             None,
             None,
         )?;
-        Ok(status.into())
+        Ok(Some(status.into()))
     }
 }

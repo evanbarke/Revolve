@@ -445,6 +445,25 @@ pub fn decide(inp: &PolicyInput) -> PolicyOutput {
         steps: vec![],
         revision: inp.goal_revision,
     };
+    // A consumed part seen back in its own stock bin (a rework placement whose return
+    // record was interrupted) is recorded as returned before anything else.
+    for bin in obs.bins() {
+        for o in obs.objects_at(&bin.location_id) {
+            let k = effective_kind(o, inp.classes);
+            if consumed.contains(o.object_id.as_str()) && bin_for_kind(&k) == bin.location_id {
+                b.push(
+                    format!("return-{}", o.object_id),
+                    "inventory.return",
+                    json!({"part_kind": k, "quantity": 1, "evidence_object_id": o.object_id}),
+                    vec![Condition::ObjectAt {
+                        object_id: o.object_id.clone(),
+                        location_id: bin.location_id.clone(),
+                    }],
+                    vec![],
+                );
+            }
+        }
+    }
     // Reservation needs: allocated stock parts + parts in kit trays not yet recorded as consumed.
     let mut needed = KindCounts::new();
     let mut to_consume_in_place: Vec<(String, String)> = vec![]; // (object, tray)

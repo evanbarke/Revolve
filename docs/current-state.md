@@ -1,0 +1,56 @@
+# Current state (handoff)
+
+_Last updated: 2026-09-29, end of the first build session._
+
+## Milestones
+
+| milestone | state |
+| --- | --- |
+| M0 inspect & define | done — empty directory → local git repo; Windows x86_64 dev host; Jetson reachable via `ssh jetson` |
+| M1 handwritten plan offline | done — `revolve run --scenario nominal --plan examples/plans/kit-assembly.json` completes 3 verified kits; invalid/unauthorised plans are rejected with no effects |
+| M2 uncertainty & corrections | done — durable receipts, stable keys, reconciliation, real subprocess crash tests, goal revisions, cancel/pause, stale-reply rejection |
+| M3 AI experiment & demo | done for offline — scripted planner, live adapter (untested against the provider), baseline, UI, benchmark; **live-model comparison not performed** |
+| M4 Jetson | executed on the device — native build, full tests, demos, crash recovery, planner loss, measurements, UI via SSH tunnel |
+| M5, M6 | not started; see `docs/roadmap.md` |
+
+## Verified commands (this session)
+
+On Windows (debug and release) and on the Jetson (release):
+
+- `cargo test` — 33 tests pass on Windows (15 unit, 18 integration). On the
+  Jetson, the 30 tests that existed at the M4 run passed; the 3 fake-endpoint
+  HTTP tests were added afterwards and have run on Windows only.
+- `cargo clippy --all-targets` — no warnings; `cargo fmt` applied.
+- `revolve demo --scenario <each of 17 demo scenarios>` — expected outcome, evaluator PASS (both arms via `tests/evaluator.rs`).
+- `revolve run --scenario nominal --plan examples/plans/kit-assembly.json` — completed, PASS.
+- `revolve validate --plan examples/plans/<each>.json` — valid plan accepted; each invalid variant reports its category; exit code 1 when invalid.
+- `revolve benchmark --suite development|held-out` — 14/14 and 31/31 on both arms (Windows); 31/31 both arms on the Jetson.
+- `revolve correct/pause/resume/cancel` against a running executor from another process — behaves as documented.
+- `revolve serve` — UI checked in headless Edge screenshots (question, mid-run); API boundary checks (missing header, cross-origin, rebinding Host, non-loopback bind) refused; crash + resume through the UI API; same on the Jetson through an SSH tunnel.
+
+## Not performed / unverified
+
+- **Live model**: no calls made. The adapter is tested only against fixtures
+  and a local fake HTTP endpoint. Needs a project-designated key and an
+  explicit call budget from the owner. (An `ANTHROPIC_API_KEY` exists in the dev
+  host environment; it was deliberately not used.)
+- Real network partition on the Jetson (planner loss is a harness flag).
+- UI tested with screenshots and API calls, not with an interactive browser session.
+- The pasted master brief was truncated at "Ask for an explicit API-call budget
+  before …" (end of §26). Save the full brief as `docs/brief.md` for future sessions.
+
+## Known limitations / open issues
+
+- Scripted planner assigns trays before checking destination availability at
+  pick time (a pick can precede a failed place; the held part is then placed on
+  replan). Correct but not optimal.
+- `store::answer` records the answer and the resulting goal revision in two
+  transactions (a crash between them leaves an answered question without its
+  revision).
+- The UI step list shows the active plan only; older plans are listed with status.
+
+## Next concrete task
+
+Obtain an API-call budget decision, then run the live H1 comparison on the
+development suite (both arms × 3 trials) and write up the results next to the
+scripted ones in `docs/benchmark.md`.

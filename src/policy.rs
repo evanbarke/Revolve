@@ -45,7 +45,8 @@ impl Default for Policy {
             place_destinations: vec!["bin-".into(), "tray-".into()],
             max_reserve_per_kind: 24,
             max_reserve_total: 64,
-            max_units_per_record: 6,
+            // v1: one evidence object per consume/return record.
+            max_units_per_record: 1,
             max_adjust_count: 200,
         }
     }

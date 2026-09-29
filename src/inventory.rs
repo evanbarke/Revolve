@@ -180,6 +180,35 @@ fn load_reservation(tx: &Transaction, id: &str) -> Result<Option<(KindCounts, St
     Ok(row.map(|(rem, st)| (serde_json::from_str(&rem).unwrap_or_default(), st)))
 }
 
+/// Net consumption records for one evidence object (consumes minus returns).
+fn net_consumed(tx: &Transaction, object_id: &str) -> Result<i64> {
+    Ok(tx.query_row(
+        "SELECT COALESCE(SUM(CASE entry_type WHEN 'consume' THEN 1 WHEN 'return' THEN -1 ELSE 0 END), 0) FROM ledger WHERE evidence = ?1",
+        params![object_id],
+        |r| r.get(0),
+    )?)
+}
+
+/// Record a rejection under the key (so status lookup reports it) and commit.
+fn reject(
+    tx: Transaction,
+    op_key: &str,
+    capability: &str,
+    fp: &str,
+    category: &str,
+    message: String,
+) -> Result<AdapterOutcome> {
+    tx.execute(
+        "INSERT INTO inventory_ops(op_key, capability, fingerprint, outcome, category, result, at_ms) VALUES (?1, ?2, ?3, 'rejected', ?4, ?5, ?6)",
+        params![op_key, capability, fp, category, json!({"message": message}).to_string(), now_ms()],
+    )?;
+    tx.commit()?;
+    Ok(AdapterOutcome::Rejected {
+        category: category.into(),
+        message,
+    })
+}
+
 /// Apply an inventory capability under an operation key.
 pub fn apply(store: &mut RunStore, op_key: &str, capability: &str, args: &Value) -> AdapterOutcome {
     match apply_inner(store, op_key, capability, args) {
@@ -289,6 +318,27 @@ fn apply_inner(
             let kind = s("part_kind");
             let qty = q("quantity");
             let evidence = s("evidence_object_id");
+            let net = net_consumed(&tx, &evidence)?;
+            if qty != 1 {
+                return reject(
+                    tx,
+                    op_key,
+                    capability,
+                    &fp,
+                    "evidence_mismatch",
+                    "one evidence object records exactly one unit".into(),
+                );
+            }
+            if net > 0 {
+                return reject(
+                    tx,
+                    op_key,
+                    capability,
+                    &fp,
+                    "evidence_mismatch",
+                    format!("{evidence} is already recorded as consumed"),
+                );
+            }
             match load_reservation(&tx, &rid)? {
                 None => Err((
                     "unknown_reservation".into(),
@@ -376,6 +426,26 @@ fn apply_inner(
             let kind = s("part_kind");
             let qty = q("quantity");
             let evidence = s("evidence_object_id");
+            if qty != 1 {
+                return reject(
+                    tx,
+                    op_key,
+                    capability,
+                    &fp,
+                    "evidence_mismatch",
+                    "one evidence object records exactly one unit".into(),
+                );
+            }
+            if net_consumed(&tx, &evidence)? != 1 {
+                return reject(
+                    tx,
+                    op_key,
+                    capability,
+                    &fp,
+                    "evidence_mismatch",
+                    format!("{evidence} is not recorded as consumed; nothing to return"),
+                );
+            }
             tx.execute(
                 "UPDATE inventory SET on_hand = on_hand + ?1 WHERE kind = ?2",
                 params![qty, kind],

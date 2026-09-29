@@ -616,60 +616,95 @@ impl RunStore {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (cur, status): (i64, String) = tx.query_row(
-            "SELECT current_goal_revision, status FROM run_state WHERE id = 1",
+        let rev = goal_revision_in_tx(&tx, spec, author, reason)?;
+        tx.commit()?;
+        Ok(rev)
+    }
+
+    /// Request pause/cancel (or clear a pause with "run"), as one transaction.
+    /// A cancel can never be withdrawn.
+    pub fn request_control(&mut self, control: &str) -> Result<()> {
+        if !matches!(control, "run" | "pause" | "cancel") {
+            bail!("unknown control request `{control}`");
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (status, current): (String, String) = tx.query_row(
+            "SELECT status, control FROM run_state WHERE id = 1",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         if is_terminal(&status) {
-            bail!(
-                "run already finished with status `{status}`; start a new run instead of correcting this one"
-            );
+            bail!("run already finished with status `{status}`");
         }
-        let next = cur + 1;
-        tx.execute(
-            "INSERT INTO goal_revisions(revision, spec, author, reason, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![next, serde_json::to_string(spec)?, author, reason, now_ms()],
-        )?;
-        tx.execute(
-            "UPDATE run_state SET current_goal_revision = ?1, updated_at_ms = ?2 WHERE id = 1",
-            params![next, now_ms()],
-        )?;
-        // Open questions against the old revision are now obsolete.
-        tx.execute(
-            "UPDATE questions SET status = 'obsolete' WHERE status = 'open' AND goal_revision < ?1",
-            params![next],
-        )?;
-        tx.execute(
-            "INSERT INTO events(at_ms, kind, goal_revision, message, data) VALUES (?1, 'goal_revised', ?2, ?3, ?4)",
-            params![now_ms(), next, format!("goal revision {next} by {author}: {} ({reason})", spec.summary()), serde_json::to_string(spec)?],
-        )?;
-        tx.commit()?;
-        Ok(next as u32)
-    }
-
-    pub fn request_control(&self, control: &str) -> Result<()> {
-        if !matches!(control, "run" | "pause" | "cancel") {
-            bail!("unknown control request `{control}`");
-        }
-        let st = self.state()?;
-        if is_terminal(&st.status) {
-            bail!("run already finished with status `{}`", st.status);
-        }
-        if st.control == "cancel" && control != "cancel" {
+        if current == "cancel" && control != "cancel" {
             bail!("a cancel request is already in force; it cannot be withdrawn");
         }
-        self.conn.execute(
+        tx.execute(
             "UPDATE run_state SET control = ?1, updated_at_ms = ?2 WHERE id = 1",
             params![control, now_ms()],
         )?;
-        self.event(
+        event_in_tx(
+            &tx,
             "control_requested",
             &format!("control request: {control}"),
             None,
             None,
         )?;
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Clear a pause (only a pause) when an executor resumes. Returns whether it changed.
+    pub fn resume_from_pause(&self) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE run_state SET control = 'run', updated_at_ms = ?1 WHERE id = 1 AND control = 'pause'",
+            params![now_ms()],
+        )?;
+        if n > 0 {
+            self.event("control_requested", "pause cleared by resume", None, None)?;
+        }
+        Ok(n > 0)
+    }
+
+    /// Atomic terminal transition: succeeds only if the goal revision is still the
+    /// one the executor finalised against and the control flag is one of `allowed`.
+    /// Returns false (nothing written) if a correction/pause/cancel slipped in.
+    pub fn finish_run(
+        &mut self,
+        expected_revision: u32,
+        allowed_controls: &[&str],
+        status: &str,
+        reason: &str,
+        report: Option<&Value>,
+    ) -> Result<bool> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (rev, control, prev): (i64, String, String) = tx.query_row(
+            "SELECT current_goal_revision, control, status FROM run_state WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        if rev as u32 != expected_revision || !allowed_controls.contains(&control.as_str()) {
+            return Ok(false);
+        }
+        tx.execute(
+            "UPDATE run_state SET status = ?1, status_reason = ?2, final_report = COALESCE(?3, final_report), updated_at_ms = ?4 WHERE id = 1",
+            params![status, reason, report.map(|r| r.to_string()), now_ms()],
+        )?;
+        if prev != status {
+            event_in_tx(
+                &tx,
+                "run_status",
+                &format!("run status {prev} -> {status}: {reason}"),
+                None,
+                None,
+            )?;
+        }
+        tx.commit()?;
+        Ok(true)
     }
 
     // ------------------------------------------------------------------ plans
@@ -950,37 +985,49 @@ impl RunStore {
     // ------------------------------------------------------------------ questions & facts
 
     pub fn ask(
-        &self,
+        &mut self,
         goal_revision: u32,
         kind: &str,
         prompt: &str,
         options: &[QuestionOption],
         context: &Value,
-    ) -> Result<i64> {
-        // Do not ask the same open question twice.
-        if let Some(id) = self
+    ) -> Result<Option<i64>> {
+        // One transaction: refuse questions for an obsolete revision; do not ask twice.
+        let tx = self
             .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let cur: i64 = tx.query_row(
+            "SELECT current_goal_revision FROM run_state WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )?;
+        if cur as u32 != goal_revision {
+            return Ok(None);
+        }
+        if let Some(id) = tx
             .query_row(
-                "SELECT question_id FROM questions WHERE status = 'open' AND kind = ?1 AND context = ?2",
-                params![kind, context.to_string()],
+                "SELECT question_id FROM questions WHERE status = 'open' AND kind = ?1 AND context = ?2 AND goal_revision = ?3",
+                params![kind, context.to_string(), goal_revision as i64],
                 |r| r.get::<_, i64>(0),
             )
             .optional()?
         {
-            return Ok(id);
+            return Ok(Some(id));
         }
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO questions(goal_revision, kind, prompt, options, context, status, asked_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, 'open', ?6)",
             params![goal_revision as i64, kind, prompt, serde_json::to_string(options)?, context.to_string(), now_ms()],
         )?;
-        let id = self.conn.last_insert_rowid();
-        self.event(
+        let id = tx.last_insert_rowid();
+        event_in_tx(
+            &tx,
             "question_asked",
             &format!("question #{id}: {prompt}"),
             None,
             Some(json!({"question_id": id, "kind": kind})),
         )?;
-        Ok(id)
+        tx.commit()?;
+        Ok(Some(id))
     }
 
     pub fn questions(&self) -> Result<Vec<QuestionRow>> {
@@ -1014,92 +1061,105 @@ impl RunStore {
 
     /// Answer a question. Substitution/rework decisions become a new goal revision;
     /// classifications become a human-provenance fact. Answers never change grants.
+    /// One transaction: the answer and its consequence commit together, against the
+    /// goal as it is at that moment (no lost update with a concurrent correction).
     pub fn answer(&mut self, question_id: i64, choice: &str, author: &str) -> Result<String> {
-        let q = self
-            .questions()?
-            .into_iter()
-            .find(|q| q.question_id == question_id)
-            .ok_or_else(|| Error::new(format!("no question #{question_id}")))?;
-        if q.status != "open" {
-            bail!(
-                "question #{question_id} is {} and cannot be answered",
-                q.status
-            );
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<(String, String, String, String)> = tx
+            .query_row(
+                "SELECT kind, options, context, status FROM questions WHERE question_id = ?1",
+                params![question_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        let Some((kind, options, context, status)) = row else {
+            bail!("no question #{question_id}")
+        };
+        if status != "open" {
+            bail!("question #{question_id} is {status} and cannot be answered");
         }
-        if !q.options.iter().any(|o| o.id == choice) {
-            let ids: Vec<&str> = q.options.iter().map(|o| o.id.as_str()).collect();
+        let options: Vec<QuestionOption> = serde_json::from_str(&options).unwrap_or_default();
+        if !options.iter().any(|o| o.id == choice) {
+            let ids: Vec<&str> = options.iter().map(|o| o.id.as_str()).collect();
             bail!(
                 "`{choice}` is not an option for question #{question_id} (options: {})",
                 ids.join(", ")
             );
         }
-        self.conn.execute(
-            "UPDATE questions SET status = 'answered', answer = ?1, answered_at_ms = ?2 WHERE question_id = ?3",
+        let context: Value = serde_json::from_str(&context).unwrap_or(Value::Null);
+        let n = tx.execute(
+            "UPDATE questions SET status = 'answered', answer = ?1, answered_at_ms = ?2 WHERE question_id = ?3 AND status = 'open'",
             params![choice, now_ms(), question_id],
         )?;
-        self.event(
+        if n != 1 {
+            bail!("question #{question_id} was answered concurrently");
+        }
+        event_in_tx(
+            &tx,
             "question_answered",
             &format!("question #{question_id} answered by {author}: {choice}"),
             None,
             Some(json!({"question_id": question_id, "choice": choice})),
         )?;
-        let outcome = match q.kind.as_str() {
+        let current_goal = |tx: &rusqlite::Transaction| -> Result<GoalSpec> {
+            let s: String = tx.query_row(
+                "SELECT g.spec FROM goal_revisions g JOIN run_state r ON g.revision = r.current_goal_revision WHERE r.id = 1",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok(serde_json::from_str(&s)?)
+        };
+        let ctx = |k: &str| {
+            context
+                .get(k)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let outcome = match kind.as_str() {
             "classification" => {
-                let obj = q
-                    .context
-                    .get("object_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                self.conn.execute(
+                let obj = ctx("object_id");
+                tx.execute(
                     "INSERT INTO facts(kind, subject, value, provenance, at_ms) VALUES ('classification', ?1, ?2, ?3, ?4)",
                     params![obj, choice, format!("{author} (question #{question_id})"), now_ms()],
                 )?;
                 format!("recorded classification {obj} = {choice}")
             }
             "substitution" => {
-                let (_, mut goal) = self.current_goal()?;
+                let mut goal = current_goal(&tx)?;
                 let sub = Substitution {
-                    replace: q
-                        .context
-                        .get("replace")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .into(),
-                    with: q
-                        .context
-                        .get("with")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .into(),
+                    replace: ctx("replace"),
+                    with: ctx("with"),
                 };
                 if choice == "approve" {
                     goal.approved_substitutions.push(sub.clone());
                 } else {
                     goal.declined_substitutions.push(sub.clone());
                 }
-                let rev = self.submit_goal_revision(
-                    &goal,
-                    author,
-                    &format!(
-                        "answer to question #{question_id}: {choice} substitution {} -> {}",
-                        sub.replace, sub.with
-                    ),
-                )?;
-                format!("goal revision {rev}")
+                goal.validate()?;
+                let why = format!(
+                    "answer to question #{question_id}: {choice} substitution {} -> {}",
+                    sub.replace, sub.with
+                );
+                format!(
+                    "goal revision {}",
+                    goal_revision_in_tx(&tx, &goal, author, &why)?
+                )
             }
             "rework" => {
-                let (_, mut goal) = self.current_goal()?;
+                let mut goal = current_goal(&tx)?;
                 goal.rework_permitted = Some(choice == "approve");
-                let rev = self.submit_goal_revision(
-                    &goal,
-                    author,
-                    &format!("answer to question #{question_id}: rework {choice}"),
-                )?;
-                format!("goal revision {rev}")
+                let why = format!("answer to question #{question_id}: rework {choice}");
+                format!(
+                    "goal revision {}",
+                    goal_revision_in_tx(&tx, &goal, author, &why)?
+                )
             }
             _ => "answer recorded".into(),
         };
+        tx.commit()?;
         Ok(outcome)
     }
 
@@ -1197,6 +1257,63 @@ impl RunStore {
     }
 }
 
+fn event_in_tx(
+    tx: &rusqlite::Transaction,
+    kind: &str,
+    message: &str,
+    action_id: Option<i64>,
+    data: Option<Value>,
+) -> Result<()> {
+    let rev: i64 = tx.query_row(
+        "SELECT current_goal_revision FROM run_state WHERE id = 1",
+        [],
+        |r| r.get(0),
+    )?;
+    tx.execute(
+        "INSERT INTO events(at_ms, kind, goal_revision, action_id, message, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![now_ms(), kind, rev, action_id, message, data.map(|d| d.to_string())],
+    )?;
+    Ok(())
+}
+
+/// Insert a goal revision and move the current pointer, inside the caller's IMMEDIATE transaction.
+fn goal_revision_in_tx(
+    tx: &rusqlite::Transaction,
+    spec: &GoalSpec,
+    author: &str,
+    reason: &str,
+) -> Result<u32> {
+    let (cur, status): (i64, String) = tx.query_row(
+        "SELECT current_goal_revision, status FROM run_state WHERE id = 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if is_terminal(&status) {
+        bail!(
+            "run already finished with status `{status}`; start a new run instead of correcting this one"
+        );
+    }
+    let next = cur + 1;
+    tx.execute(
+        "INSERT INTO goal_revisions(revision, spec, author, reason, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![next, serde_json::to_string(spec)?, author, reason, now_ms()],
+    )?;
+    tx.execute(
+        "UPDATE run_state SET current_goal_revision = ?1, updated_at_ms = ?2 WHERE id = 1",
+        params![next, now_ms()],
+    )?;
+    // Open questions against the old revision are now obsolete.
+    tx.execute(
+        "UPDATE questions SET status = 'obsolete' WHERE status = 'open' AND goal_revision < ?1",
+        params![next],
+    )?;
+    tx.execute(
+        "INSERT INTO events(at_ms, kind, goal_revision, message, data) VALUES (?1, 'goal_revised', ?2, ?3, ?4)",
+        params![now_ms(), next, format!("goal revision {next} by {author}: {} ({reason})", spec.summary()), serde_json::to_string(spec)?],
+    )?;
+    Ok(next as u32)
+}
+
 /// Parts available for kits: units in the kind's stock bin (after human
 /// classification) plus a unit in the gripper not recorded as consumed (in
 /// transit from stock). Unclassified items are not counted; kinds whose bin or
@@ -1284,6 +1401,18 @@ impl OwnerLock {
             .truncate(false)
             .write(true)
             .open(&path)?;
+        // Brief retries tolerate status probes (`is_held`), which hold the lock for microseconds.
+        for _ in 0..20 {
+            match file.try_lock() {
+                Ok(()) => return Ok(OwnerLock { _file: file }),
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    std::thread::sleep(std::time::Duration::from_millis(25))
+                }
+                Err(std::fs::TryLockError::Error(e)) => {
+                    bail!("could not lock {}: {e}", path.display())
+                }
+            }
+        }
         match file.try_lock() {
             Ok(()) => Ok(OwnerLock { _file: file }),
             Err(std::fs::TryLockError::WouldBlock) => {

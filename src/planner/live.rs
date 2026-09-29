@@ -633,12 +633,9 @@ mod tests {
 
     // ---- HTTP path against a LOCAL FAKE endpoint (not the provider; no network egress).
 
-    fn fake_server(
-        responses: Vec<(u16, Value)>,
-    ) -> (
-        String,
-        std::thread::JoinHandle<Vec<(Vec<(String, String)>, Value)>>,
-    ) {
+    type Seen = Vec<(Vec<(String, String)>, Value)>;
+
+    fn fake_server(responses: Vec<(u16, Value)>) -> (String, std::thread::JoinHandle<Seen>) {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let url = format!(
             "http://{}/v1/messages",

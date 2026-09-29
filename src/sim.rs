@@ -944,6 +944,42 @@ impl SimWorld {
         Ok(())
     }
 
+    /// Human actions whose trigger fired but whose delivery was not recorded
+    /// (e.g. the executor crashed right after the effect that fired them).
+    pub fn undelivered_human_actions(&self) -> Result<Vec<FiredHumanAction>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT fault_id, spec FROM faults WHERE state = 'fired' ORDER BY fault_id")?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, s)| match FaultOrHuman::parse(&s) {
+                Some(FaultOrHuman::Human(action)) => Some(FiredHumanAction {
+                    fault_id: id,
+                    action,
+                }),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// Record that fired human actions were delivered to the harness hook.
+    pub fn mark_delivered(&mut self, ids: &[i64]) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for id in ids {
+            tx.execute(
+                "UPDATE faults SET state = 'consumed' WHERE fault_id = ?1 AND state = 'fired'",
+                params![id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// One-shot consumption of a due "inject unauthorized action" fault by the planner wrapper.
     pub fn take_due_injection(&mut self) -> Result<bool> {
         let tx = self

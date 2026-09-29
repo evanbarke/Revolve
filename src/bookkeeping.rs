@@ -18,6 +18,12 @@ use crate::store::*;
 use crate::util::Result;
 use serde_json::{Value, json};
 
+/// Whether a bookkeeping error means "something changed underneath" (a pause or
+/// cancel is in force, or the goal was revised) rather than a real failure.
+pub fn is_hold(err: &str) -> bool {
+    err.contains("ControlHold") || err.contains("StaleRevision")
+}
+
 /// Execute one runtime-originated bookkeeping action. Returns Some(error) if it did not apply.
 pub fn runtime_action(
     store: &mut RunStore,
@@ -107,8 +113,10 @@ pub fn sync_inventory(
         if rec == *n {
             continue;
         }
-        if view.reserved.get(k).copied().unwrap_or(0) > *n {
-            release_open_reservations(store, world, policy, cleanup)?;
+        if view.reserved.get(k).copied().unwrap_or(0) > *n
+            && let Some(e) = release_open_reservations(store, world, policy, cleanup)?
+        {
+            return Ok(Some(e));
         }
         store.event(
             "inventory_discrepancy",
@@ -130,12 +138,14 @@ pub fn sync_inventory(
     Ok(None)
 }
 
+/// Release every open reservation. Returns Some(error) if a pause/cancel/correction
+/// prevented it (the caller should re-evaluate); other failures are logged.
 pub fn release_open_reservations(
     store: &mut RunStore,
     world: &mut SimWorld,
     policy: &Policy,
     cleanup: bool,
-) -> Result<()> {
+) -> Result<Option<String>> {
     for r in inventory::view(store)?
         .open_reservations()
         .cloned()
@@ -149,6 +159,9 @@ pub fn release_open_reservations(
             json!({"reservation_id": r.reservation_id}),
             cleanup,
         )? {
+            if is_hold(&e) {
+                return Ok(Some(e));
+            }
             store.event(
                 "cleanup_failed",
                 &format!("could not release {}: {e}", r.reservation_id),
@@ -157,12 +170,12 @@ pub fn release_open_reservations(
             )?;
         }
     }
-    Ok(())
+    Ok(None)
 }
 
-/// Record consumption for parts observed in kit trays that are not yet recorded
-/// (e.g. a cancel landed between a place and its consume), then release
-/// reservations. Residual differences are NOT adjusted here: they are reported,
+/// Record returns for consumed parts observed back in their stock bin, record
+/// consumption for parts observed in kit trays that are not yet recorded (e.g. a
+/// cancel landed between a place and its consume), then release reservations. Residual differences are NOT adjusted here: they are reported,
 /// so an accounting bug stays visible.
 pub fn settle_inventory(
     store: &mut RunStore,
@@ -182,6 +195,28 @@ pub fn settle_inventory(
     }
     let classes = store.classifications()?;
     let consumed = inventory::consumed_evidence(store)?;
+    // A consumed part seen back in its own stock bin (e.g. a rework placement whose
+    // return record was interrupted) is recorded as returned.
+    for o in &obs.objects {
+        let kind = effective_kind(o, &classes);
+        if consumed.contains(&o.object_id) && o.location_id == crate::model::bin_for_kind(&kind) {
+            let args = json!({"part_kind": kind, "quantity": 1, "evidence_object_id": o.object_id});
+            if let Some(e) =
+                runtime_action(store, world, policy, "inventory.return", args, cleanup)?
+            {
+                if is_hold(&e) {
+                    return Ok(Some(e));
+                }
+                store.event(
+                    "cleanup_failed",
+                    &format!("could not record return of {}: {e}", o.object_id),
+                    None,
+                    None,
+                )?;
+            }
+        }
+    }
+    let consumed = inventory::consumed_evidence(store)?;
     for o in &obs.objects {
         let in_tray = obs
             .location(&o.location_id)
@@ -198,7 +233,13 @@ pub fn settle_inventory(
             continue;
         };
         let args = json!({"reservation_id": res.reservation_id, "part_kind": kind, "quantity": 1, "evidence_object_id": o.object_id});
-        if runtime_action(store, world, policy, "inventory.consume", args, cleanup)?.is_none() {
+        let r = runtime_action(store, world, policy, "inventory.consume", args, cleanup)?;
+        if let Some(e) = &r
+            && is_hold(e)
+        {
+            return Ok(Some(e.clone()));
+        }
+        if r.is_none() {
             store.event(
                 "inventory_settled",
                 &format!(
@@ -210,6 +251,5 @@ pub fn settle_inventory(
             )?;
         }
     }
-    release_open_reservations(store, world, policy, cleanup)?;
-    Ok(None)
+    release_open_reservations(store, world, policy, cleanup)
 }
