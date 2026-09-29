@@ -7,3 +7,4 @@
 *.db-shm
 .env
 *.key
+__pycache__/
