@@ -1,0 +1,43 @@
+# Revolve edge measurements
+utc: 2026-09-29T14:06:38Z
+binary: revolve 0.1.0 (8584880 bytes)
+arch: aarch64; kernel 5.15.148-tegra
+tegrastats: sampling every 1000 ms (pid 153471, started by this script)
+
+## Startup (process start to exit)
+- revolve --version: mean 3 ms over 5
+- revolve capabilities: mean 3 ms over 5
+- revolve doctor --state-dir /home/evan/revolve/m4/state: mean 4 ms over 5
+
+## Demonstrations (fresh run each; scripted planner and scripted human)
+- nominal: completed, evaluator PASS, 921 ms wall; 1 executor process(es), 0 simulated crash(es), human interventions: []
+- crash-after-effect: completed, evaluator PASS, 973 ms wall; 2 executor process(es), 1 simulated crash(es), human interventions: []
+- crash-before-effect: completed, evaluator PASS, 994 ms wall; 2 executor process(es), 1 simulated crash(es), human interventions: []
+- timeout-unknown: completed, evaluator PASS, 868 ms wall; 1 executor process(es), 0 simulated crash(es), human interventions: []
+- unknown-outcome-blocked: blocked, evaluator PASS, 660 ms wall; 1 executor process(es), 0 simulated crash(es), human interventions: []
+- unknown-outcome-restored: completed, evaluator PASS, 941 ms wall; 2 executor process(es), 0 simulated crash(es), human interventions: [restore_evidence]
+- planner-unavailable: completed, evaluator PASS, 1096 ms wall; 2 executor process(es), 0 simulated crash(es), human interventions: [restore_planner]
+- goal-change: completed, evaluator PASS, 761 ms wall; 1 executor process(es), 0 simulated crash(es), human interventions: []
+- unauthorized-proposal: completed, evaluator PASS, 950 ms wall; 1 executor process(es), 0 simulated crash(es), human interventions: []
+- cancel: stopped, evaluator PASS, 537 ms wall; 1 executor process(es), 0 simulated crash(es), human interventions: []
+
+## Repeated workload: 20 x nominal (3 kits, 38 actions each)
+- wall per run: mean 925 ms, min 871 ms, max 996 ms
+
+## Held-out benchmark on device (both arms, scripted)
+- benchmark wall: 56060 ms; report: /home/evan/revolve/m4/benchmark-held-out/report.md
+| success (outcome as expected, no false claims/violations) | 31 / 31 | 31 / 31 |
+| false success claims | 0 | 0 |
+| trials with incorrect inventory | 0 | 0 |
+| recovery success (faulted trials) | 14 / 14 | 14 / 14 |
+| planner/model requests (total) | 1163 | 45 |
+| mean wall ms per trial | 805 | 831 |
+| max peak RSS of an executor process (bytes) | 7450624 | 8929280 |
+
+## State on disk
+- state directory size: 22M for 92 runs
+
+## tegrastats summary (source: tegrastats, 1 s samples during this script)
+- samples: 83; VDD_IN mean 5109 mW, max 6120 mW; max tj 59.2 C; max system RAM used 2448 MB
+
+done

@@ -36,7 +36,6 @@ struct Ctx {
     state_dir: PathBuf,
     scenarios_dir: PathBuf,
     step_delay_ms: u64,
-    host: String,
     children: Mutex<HashMap<String, Child>>,
     exe: PathBuf,
 }
@@ -63,7 +62,6 @@ pub fn serve(bind: &str, state_dir: &Path, scenarios_dir: &Path, step_delay_ms: 
         state_dir: state_dir.to_path_buf(),
         scenarios_dir: scenarios_dir.to_path_buf(),
         step_delay_ms,
-        host: addr.to_string(),
         children: Mutex::new(HashMap::new()),
         exe: std::env::current_exe()?,
     });
@@ -104,9 +102,20 @@ fn get_header<'a>(req: &'a Request, name: &str) -> Option<&'a str> {
         .map(|h| h.value.as_str())
 }
 
+/// True for a Host/Origin authority that names the loopback interface (any port).
+/// Any port is accepted so that SSH tunnels with a different local port work;
+/// a DNS-rebinding attacker's hostname never matches.
+fn is_loopback_authority(a: &str) -> bool {
+    let host = if let Some(rest) = a.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        a.rsplit_once(':').map(|(h, _)| h).unwrap_or(a)
+    };
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
 /// Boundary check for mutating requests. Exposed for tests.
 pub fn mutation_allowed(
-    expected_host: &str,
     host: Option<&str>,
     origin: Option<&str>,
     client: Option<&str>,
@@ -114,15 +123,13 @@ pub fn mutation_allowed(
     if client != Some("ui") {
         return Err("missing X-Revolve-Client header");
     }
-    let host_ok =
-        |h: &str| h == expected_host || h == expected_host.replace("127.0.0.1", "localhost");
     match host {
-        Some(h) if host_ok(h) => {}
+        Some(h) if is_loopback_authority(h) => {}
         _ => return Err("unexpected Host header"),
     }
     if let Some(o) = origin {
         let o = o.trim_start_matches("http://");
-        if !host_ok(o) {
+        if !is_loopback_authority(o) {
             return Err("cross-origin request refused");
         }
     }
@@ -145,7 +152,6 @@ fn handle(ctx: &Ctx, mut req: Request) {
     }
     if method == Method::Post
         && let Err(why) = mutation_allowed(
-            &ctx.host,
             get_header(&req, "Host"),
             get_header(&req, "Origin"),
             get_header(&req, "X-Revolve-Client"),
@@ -482,28 +488,32 @@ mod tests {
     }
 
     #[test]
-    fn mutations_need_the_client_header_and_matching_host_and_origin() {
-        let host = "127.0.0.1:8080";
-        assert!(mutation_allowed(host, Some(host), None, Some("ui")).is_ok());
+    fn mutations_need_the_client_header_and_loopback_host_and_origin() {
+        let ui = Some("ui");
+        assert!(mutation_allowed(Some("127.0.0.1:8080"), None, ui).is_ok());
+        // An SSH tunnel on another local port, and the localhost / IPv6 spellings.
         assert!(
-            mutation_allowed(
-                host,
-                Some("localhost:8080"),
-                Some("http://localhost:8080"),
-                Some("ui")
-            )
-            .is_ok()
+            mutation_allowed(Some("127.0.0.1:18080"), Some("http://127.0.0.1:18080"), ui).is_ok()
         );
         assert!(
-            mutation_allowed(host, Some(host), None, None).is_err(),
+            mutation_allowed(Some("localhost:8080"), Some("http://localhost:8080"), ui).is_ok()
+        );
+        assert!(mutation_allowed(Some("[::1]:8080"), None, ui).is_ok());
+        assert!(
+            mutation_allowed(Some("127.0.0.1:8080"), None, None).is_err(),
             "missing custom header"
         );
         assert!(
-            mutation_allowed(host, Some("evil.example:8080"), None, Some("ui")).is_err(),
+            mutation_allowed(Some("evil.example:8080"), None, ui).is_err(),
             "DNS rebinding"
         );
         assert!(
-            mutation_allowed(host, Some(host), Some("http://evil.example"), Some("ui")).is_err(),
+            mutation_allowed(Some("127.0.0.1.evil.example"), None, ui).is_err(),
+            "look-alike host"
+        );
+        assert!(mutation_allowed(None, None, ui).is_err(), "no Host header");
+        assert!(
+            mutation_allowed(Some("127.0.0.1:8080"), Some("http://evil.example"), ui).is_err(),
             "cross-origin"
         );
     }
