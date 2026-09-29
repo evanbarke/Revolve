@@ -104,6 +104,7 @@ cargo clippy --all-targets && cargo fmt --check
 
 ## Documentation
 
+- `docs/vision.md` — the goal: human intent → compiled code → robot movement, and the proposed path
 - `docs/architecture.md` — runtime boundary and what the compiler does
 - `docs/action-ir.md` — Action IR v1 and capability contracts
 - `docs/recovery.md` — transactions, state machine, unknown outcomes, corrections

@@ -1,6 +1,7 @@
 # Roadmap (deferred work)
 
 Current: M0–M3 implemented; M4 executed on the device. See `docs/current-state.md`.
+The goal these steps serve, and the proposed path beyond them, is in `docs/vision.md`.
 
 ## Next concrete steps
 

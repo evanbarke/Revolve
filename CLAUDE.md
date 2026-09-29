@@ -5,7 +5,8 @@ proposal (Action IR JSON) → compiler/validator + runtime-held policy →
 persistent sequential executor with reconciliation → adapters (simulator
 `world.db`, inventory ledger in `run.db`) → verifier. A direct tool-calling
 baseline shares the gateway for benchmarking. Read `docs/current-state.md`
-first; it records what works, what was verified, and the next task.
+first; it records what works, what was verified, and the next task. `docs/vision.md`
+is the goal the work serves (human intent → compiled code → robot movement).
 
 ## Commands
 
