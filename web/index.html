@@ -27,6 +27,11 @@
 <main class="simple">
   <!-- Start a run -->
   <section class="card" id="start-card">
+    <div id="start-collapsed" class="start-collapsed" hidden>
+      <button id="btn-new" type="button" class="ghost">New request</button>
+      <span class="muted small">Previous runs stay listed at the top of the page.</span>
+    </div>
+    <div id="start-full">
     <h2>Start a run</h2>
     <form id="new-run">
       <label>Starting situation on the table
@@ -59,12 +64,13 @@
         <label class="check"><input type="checkbox" id="scripted-human"> Answer questions automatically (for demos)</label>
         <label class="check"><input type="checkbox" id="show-all-scenarios"> Show test scenarios too</label>
       </details>
-      <button type="submit" class="big">Start</button>
+      <button type="submit" id="start-btn" class="big">Start</button>
     </form>
+    </div>
   </section>
 
   <!-- Now -->
-  <section class="card now" id="now-card">
+  <section class="card now" id="now-card" hidden>
     <div class="now-head">
       <div id="now-badge" class="badge">Nothing running</div>
       <div id="now-progress" class="muted"></div>

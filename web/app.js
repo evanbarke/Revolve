@@ -317,7 +317,7 @@ function renderNow(v, trayKit) {
     title("It could not finish the job", v.state.status_reason || "");
   }
   if (["completed", "partial", "stopped", "failed"].includes(st)) {
-    actions.append(actionButton("Start another run", () => { window.scrollTo({ top: 0, behavior: "smooth" }); }, "ghost"));
+    actions.append(actionButton("New request", () => { newRequest(); window.scrollTo({ top: 0, behavior: "smooth" }); }, "ghost"));
   }
 }
 
@@ -627,19 +627,51 @@ function renderTech(v) {
 
 // ------------------------------------------------------------------ main render / poll
 
+// The page shows one thing at a time: the request form (no run selected), or a
+// run with a single "New request" button in place of the form.
+function showMode() {
+  const run = !!current;
+  $("start-full").hidden = run;
+  $("start-collapsed").hidden = !run;
+  $("now-card").hidden = !run;
+  if (!run) $("run-panels").hidden = true;
+}
+
+// Exactly one start button on screen: the form's own button is hidden while the
+// "I understood ..." confirmation (which has its own) is shown.
+function syncStartButton() {
+  const b = $("start-btn");
+  b.hidden = !$("interpretation").hidden;
+  b.textContent = $("new-request").value.trim() ? "Read my request" : "Start";
+}
+function showInterpretation(on) {
+  $("interpretation").hidden = !on;
+  syncStartButton();
+}
+
+function changeWords() {
+  showInterpretation(false);
+  $("new-request").focus();
+}
+
+function newRequest() {
+  current = null;
+  view = null;
+  $("run-select").value = "";
+  history.replaceState(null, "", "#");
+  showInterpretation(false);
+  showMode();
+  $("new-request").focus();
+}
+
 function renderEmpty() {
-  $("run-panels").hidden = true;
-  setBadge("idle", "Nothing running");
-  $("now-title").textContent = "Choose what should happen above and press Start.";
-  $("now-detail").textContent = "Or pick one of your previous runs at the top of the page.";
-  $("now-progress").textContent = "";
-  $("progress-bar").hidden = true;
-  $("question-box").hidden = true;
-  clear($("now-actions"));
+  showMode();
 }
 
 function render(v) {
+  if (v.meta.run_id !== current) return; // a reply for a run no longer shown
   view = v;
+  showMode();
   $("run-panels").hidden = false;
   const trayKit = trayKitMap(v);
   renderNow(v, trayKit);
@@ -682,8 +714,11 @@ async function startRun(goal) {
       scenario: $("scenario-select").value, arm: $("arm-select").value, planner: $("planner-select").value, budget: 5,
       scripted_human: $("scripted-human").checked, goal,
     });
-    $("interpretation").hidden = true;
+    showInterpretation(false);
+    $("new-request").value = "";
+    syncStartButton();
     await loadRuns(r.run_id);
+    showMode();
     history.replaceState(null, "", "#run=" + encodeURIComponent(r.run_id));
     await act("start", {}, true);
     toast("Started.");
@@ -693,10 +728,13 @@ async function startRun(goal) {
 
 function wire() {
   $("run-select").addEventListener("change", (e) => {
-    current = e.target.value || null;
-    history.replaceState(null, "", current ? "#run=" + encodeURIComponent(current) : "#");
+    if (!e.target.value) return newRequest();
+    current = e.target.value;
+    history.replaceState(null, "", "#run=" + encodeURIComponent(current));
+    showMode();
     poll();
   });
+  $("btn-new").addEventListener("click", newRequest);
   $("btn-refresh").addEventListener("click", () => loadRuns());
   $("btn-reload").addEventListener("click", () => location.reload());
   $("tech-toggle").addEventListener("change", (e) => { $("tech").hidden = !e.target.checked; if (view) render(view); });
@@ -707,8 +745,7 @@ function wire() {
     const text = $("new-request").value.trim();
     if (!text) return startRun(null);
     // Your own words: show what was understood first; nothing runs until you confirm.
-    const box = $("interpretation");
-    box.hidden = false;
+    showInterpretation(true);
     $("interp-title").textContent = "Reading your request…";
     $("interp-detail").textContent = "";
     clear($("interp-actions"));
@@ -722,18 +759,19 @@ function wire() {
         $("interp-detail").textContent = (r.assumptions ? "Assumed: " + r.assumptions + " " : "") + (r.not_supported ? "Not possible here: " + r.not_supported + " " : "") + "(read by " + r.by + cost + ")";
         $("interp-actions").append(
           actionButton("Yes, start", () => startRun(r.goal), "big"),
-          actionButton("Change my words", () => { box.hidden = true; $("new-request").focus(); }, "ghost"));
+          actionButton("Change my words", changeWords, "ghost"));
       } else {
         $("interp-title").textContent = "I couldn't turn that into a job for this workspace.";
         $("interp-detail").textContent = (r.not_supported || "It only knows red, blue and green blocks, washers and trays.") + " (read by " + r.by + cost + ")";
-        $("interp-actions").append(actionButton("Change my words", () => { box.hidden = true; $("new-request").focus(); }, "ghost"));
+        $("interp-actions").append(actionButton("Change my words", changeWords, "ghost"));
       }
     } catch (err) {
       $("interp-title").textContent = "I couldn't read that.";
       $("interp-detail").textContent = err.message;
+      $("interp-actions").append(actionButton("Try again", changeWords, "ghost"));
     }
   });
-  $("new-request").addEventListener("input", () => { $("interpretation").hidden = true; });
+  $("new-request").addEventListener("input", () => showInterpretation(false));
   $("correct-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const comps = {};

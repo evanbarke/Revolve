@@ -148,6 +148,7 @@ details.advanced { margin: 4px 0 10px; }
 .report-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
 .tray-card { border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
 .tray-card.ok { border-color: var(--ok); }
+.start-collapsed { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .stale { margin: 0 16px 12px; padding: 10px 14px; border-radius: 8px; background: var(--warn-bg); color: var(--warn); }
 .stale button { margin-left: 8px; }
 .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 8px; max-width: calc(100% - 32px); }
