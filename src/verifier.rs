@@ -7,7 +7,8 @@
 use crate::inventory::InventoryView;
 use crate::ir::KitAssignment;
 use crate::model::{
-    Classification, GRIPPER, GoalSpec, KindCounts, Observation, effective_kind, evaluate_kit,
+    Classification, GRIPPER, GoalSpec, KindCounts, Observation, effective_kind, evaluate_against,
+    match_complete_kits,
 };
 use serde::Serialize;
 
@@ -63,21 +64,41 @@ pub fn verify(
             .and_then(|n| n.parse::<u32>().ok())
             .unwrap_or(u32::MAX)
     });
-    for t in tray_views {
+    // Each tray is judged against the kit it belongs to (its planned assignment, or
+    // the kit whose parts it matches exactly).
+    let assigned: std::collections::BTreeMap<String, u32> = assignments
+        .iter()
+        .map(|a| (a.tray_id.clone(), a.kit))
+        .collect();
+    let tray_counts: Vec<(String, KindCounts)> = tray_views
+        .iter()
+        .map(|t| {
+            let mut c = KindCounts::new();
+            for o in obs.objects_at(&t.location_id) {
+                *c.entry(effective_kind(o, classes)).or_default() += 1;
+            }
+            (t.location_id.clone(), c)
+        })
+        .collect();
+    let matched = match_complete_kits(goal, &tray_counts, &assigned);
+    for (t, (_, contents)) in tray_views.iter().zip(tray_counts.iter()) {
         let objects: Vec<String> = obs
             .objects_at(&t.location_id)
             .map(|o| o.object_id.clone())
             .collect();
-        let mut contents = KindCounts::new();
-        for o in obs.objects_at(&t.location_id) {
-            *contents.entry(effective_kind(o, classes)).or_default() += 1;
-        }
-        let (ok, missing, excess) = evaluate_kit(&contents, goal);
-        let kit = assignments
-            .iter()
-            .find(|a| a.tray_id == t.location_id)
-            .map(|a| a.kit);
-        if ok && !objects.is_empty() {
+        let kit = assigned
+            .get(&t.location_id)
+            .or_else(|| matched.get(&t.location_id))
+            .copied();
+        let (ok, missing, excess) = match kit {
+            Some(k) => {
+                let (_, m, e) = evaluate_against(contents, &goal.composition(k), goal);
+                (matched.contains_key(&t.location_id), m, e)
+            }
+            // Parts in a tray that belongs to no kit are all extra.
+            None => (false, KindCounts::new(), contents.clone()),
+        };
+        if ok {
             complete.push(t.location_id.clone());
         }
         if !t.available && !objects.is_empty() {
@@ -92,44 +113,34 @@ pub fn verify(
             kit,
             available: t.available,
             objects,
-            contents,
+            contents: contents.clone(),
             matches_composition: ok,
             missing,
             excess,
         });
     }
-    let q = goal.kit_quantity as usize;
-    if complete.len() > q {
-        notes.push(format!(
-            "{} trays match the composition but only {} kit(s) were requested; extra: {}",
-            complete.len(),
-            q,
-            complete[q..].join(", ")
-        ));
-        complete.truncate(q);
-    }
+    let done_kits: std::collections::BTreeSet<u32> = matched.values().copied().collect();
     // Parts available for the remaining kits (stock bins + an unconsumed part in transit).
     let stock = crate::store::available_stock(obs, classes, consumed);
     // What the record should say: every known part not yet recorded as consumed.
     let unconsumed = crate::store::unconsumed_counts(obs, classes, consumed);
-    // What is still missing to finish the remaining kits.
-    let remaining = q.saturating_sub(complete.len());
+    // What is still missing to finish the remaining kits: each unfinished kit needs its
+    // own parts, less what is already in its (available, conforming) tray.
     let mut needed = KindCounts::new();
-    let mut partials: Vec<&TrayReport> = trays
-        .iter()
-        .filter(|t| {
-            !t.matches_composition && t.available && t.excess.is_empty() && !t.objects.is_empty()
-        })
-        .collect();
-    partials.truncate(remaining);
-    for t in &partials {
-        for (k, n) in &t.missing {
-            *needed.entry(k.clone()).or_default() += n;
+    for k in 1..=goal.kit_quantity {
+        if done_kits.contains(&k) {
+            continue;
         }
-    }
-    for _ in partials.len()..remaining {
-        for (k, n) in &goal.kit_components {
-            *needed.entry(k.clone()).or_default() += n;
+        let comp = goal.composition(k);
+        let partial = trays.iter().find(|t| {
+            t.kit == Some(k) && t.available && t.excess.is_empty() && !t.objects.is_empty()
+        });
+        let still = match partial {
+            Some(t) => evaluate_against(&t.contents, &comp, goal).1,
+            None => comp,
+        };
+        for (kd, n) in still {
+            *needed.entry(kd).or_default() += n;
         }
     }
     let mut missing_to_finish = KindCounts::new();

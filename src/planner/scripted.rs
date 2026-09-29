@@ -19,7 +19,7 @@ use crate::ir::{
 };
 use crate::model::{
     Classification, GoalSpec, KindCounts, Observation, UNKNOWN_KIND, bin_for_kind, effective_kind,
-    evaluate_kit, substitution_candidates,
+    evaluate_against, substitution_candidates,
 };
 use crate::store::QuestionOption;
 use serde_json::{Value, json};
@@ -208,34 +208,52 @@ pub fn decide(inp: &PolicyInput) -> PolicyOutput {
             _ => {}
         }
     }
-    let mut free: Vec<&str> = trays
-        .iter()
-        .filter(|(t, a)| *a && !assign.values().any(|v| v == t))
-        .map(|(t, _)| *t)
-        .collect();
-    // Trays the person asked for first (in their order), then trays that already hold
-    // parts (continue partial kits), then empty trays.
-    let pref = |t: &str| {
-        goal.preferred_trays
-            .iter()
-            .position(|p| p == t)
-            .unwrap_or(usize::MAX)
+    // Each kit takes, in order of preference: the tray the person named for it, a
+    // tray that already holds a subset of its parts (continue a partial kit), an empty
+    // tray. Trays named for other kits and trays holding unrelated parts are avoided.
+    let specs = goal.kit_specs();
+    let named_by = |t: &str| specs.iter().position(|sp| sp.tray.as_deref() == Some(t));
+    let fits = |c: &KindCounts, comp: &KindCounts| {
+        c.iter()
+            .all(|(kd, n)| comp.get(kd).copied().unwrap_or(0) >= *n)
     };
-    free.sort_by_key(|t| (pref(t), contents(t).is_empty(), tray_num(t)));
     let mut incomplete: Vec<IncompleteKit> = vec![];
     for k in 1..=q {
         if assign.contains_key(&k) {
             continue;
         }
-        if free.is_empty() {
-            incomplete.push(IncompleteKit {
+        let comp = goal.composition(k);
+        let free: Vec<&str> = trays
+            .iter()
+            .filter(|(t, a)| *a && !assign.values().any(|v| v == t))
+            .map(|(t, _)| *t)
+            .collect();
+        let score = |t: &str| {
+            let c = counts_of(&contents(t));
+            let named = match named_by(t) {
+                Some(i) if i as u32 + 1 == k => 0,
+                None => 1,
+                Some(_) => 2,
+            };
+            let fit = if c.is_empty() {
+                1
+            } else if fits(&c, &comp) {
+                0
+            } else {
+                2
+            };
+            (named, fit, tray_num(t))
+        };
+        match free.iter().min_by_key(|t| score(t)) {
+            Some(t) => {
+                assign.insert(k, t.to_string());
+            }
+            None => incomplete.push(IncompleteKit {
                 kit: k,
                 tray_id: None,
-                missing: goal.kit_components.clone(),
+                missing: comp.clone(),
                 reason: "no available tray".into(),
-            });
-        } else {
-            assign.insert(k, free.remove(0).to_string());
+            }),
         }
     }
     // Available trays with parts that are not assigned to any kit (e.g. after a quantity reduction).
@@ -247,9 +265,9 @@ pub fn decide(inp: &PolicyInput) -> PolicyOutput {
 
     // ---- 2. excess parts -> rework decision
     let mut excess_objs: Vec<(String, String)> = vec![]; // (object, tray)
-    for tray in assign.values() {
+    for (&k, tray) in &assign {
         let objs = contents(tray);
-        let (_, _, excess) = evaluate_kit(&counts_of(&objs), goal);
+        let (_, _, excess) = evaluate_against(&counts_of(&objs), &goal.composition(k), goal);
         let mut ex = excess.clone();
         // Choose which physical objects are excess: last ones of each excess kind.
         for o in objs.iter().rev() {
@@ -336,7 +354,8 @@ pub fn decide(inp: &PolicyInput) -> PolicyOutput {
     let mut short_kinds: BTreeSet<String> = BTreeSet::new();
     for (&k, tray) in &assign {
         if nonconforming.contains(tray) {
-            let (_, missing, _) = evaluate_kit(&counts_of(&contents(tray)), goal);
+            let (_, missing, _) =
+                evaluate_against(&counts_of(&contents(tray)), &goal.composition(k), goal);
             incomplete.push(IncompleteKit {
                 kit: k,
                 tray_id: Some(tray.clone()),
@@ -349,7 +368,7 @@ pub fn decide(inp: &PolicyInput) -> PolicyOutput {
             .into_iter()
             .filter(|o| !excess_set.contains(o.as_str()))
             .collect();
-        let (done, missing, _) = evaluate_kit(&counts_of(&kept), goal);
+        let (done, missing, _) = evaluate_against(&counts_of(&kept), &goal.composition(k), goal);
         if done {
             complete_trays.push(tray.clone());
             continue;

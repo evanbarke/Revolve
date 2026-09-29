@@ -320,7 +320,7 @@ fn interpret(ctx: &Ctx, body: &str) -> Result<Value> {
         _ => Value::Null,
     };
     Ok(json!({
-        "understood": i.understood, "goal": i.goal, "summary": i.summary, "not_supported": i.not_supported,
+        "understood": i.understood, "goal": i.goal, "summary": i.summary, "assumptions": i.assumptions, "not_supported": i.not_supported, "rejected_because": i.rejected_because,
         "by": format!("AI ({model})"), "usage": info.usage.map(|(a, b)| json!({"input_tokens": a, "output_tokens": b})), "cost_usd_estimate": cost,
     }))
 }

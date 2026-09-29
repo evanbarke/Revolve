@@ -129,6 +129,15 @@ pub struct Substitution {
     pub with: String,
 }
 
+/// One kit: the parts it must contain, and optionally the tray the person asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KitSpec {
+    pub components: KindCounts,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tray: Option<String>,
+}
+
 /// The human's goal for the kit-assembly task family. Deliberately contains no
 /// permission fields: correcting a goal can never widen authority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +164,11 @@ pub struct GoalSpec {
     /// an unavailable tray is not used.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preferred_trays: Vec<String>,
+    /// Kits listed one by one when they differ. When non-empty it is authoritative:
+    /// kit_quantity must equal its length, and kit_components / preferred_trays are
+    /// not used. When empty, the goal is `kit_quantity` identical kits.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kits: Vec<KitSpec>,
 }
 
 fn default_true() -> bool {
@@ -166,6 +180,50 @@ pub const MAX_PER_KIND_PER_KIT: u32 = 6;
 
 impl GoalSpec {
     pub fn validate(&self) -> Result<()> {
+        let check_parts = |comps: &KindCounts, what: &str| -> Result<()> {
+            if comps.is_empty() {
+                bail!("{what} must list at least one part");
+            }
+            for (k, n) in comps {
+                if !is_known_kind(k) {
+                    bail!(
+                        "{what}: unknown part kind `{k}` (known: {})",
+                        KNOWN_KINDS.join(", ")
+                    );
+                }
+                if *n == 0 || *n > MAX_PER_KIND_PER_KIT {
+                    bail!("{what}: {k} quantity must be 1..={MAX_PER_KIND_PER_KIT} (got {n})");
+                }
+            }
+            Ok(())
+        };
+        let check_tray = |t: &str| -> Result<()> {
+            let n: Option<u32> = t.strip_prefix("tray-").and_then(|n| n.parse().ok());
+            if !matches!(n, Some(1..=8)) {
+                bail!("`{t}` is not a tray (tray-1 .. tray-8)");
+            }
+            Ok(())
+        };
+        if !self.kits.is_empty() {
+            if self.kits.len() as u32 != self.kit_quantity || self.kit_quantity > MAX_KITS {
+                bail!("kit_quantity must equal the number of listed kits (1..={MAX_KITS})");
+            }
+            if !self.preferred_trays.is_empty() {
+                bail!("with listed kits, give each kit its own tray instead of preferred_trays");
+            }
+            let mut trays: Vec<&str> = vec![];
+            for (i, k) in self.kits.iter().enumerate() {
+                check_parts(&k.components, &format!("kit {}", i + 1))?;
+                if let Some(t) = &k.tray {
+                    check_tray(t)?;
+                    if trays.contains(&t.as_str()) {
+                        bail!("tray `{t}` is asked for by more than one kit");
+                    }
+                    trays.push(t);
+                }
+            }
+            return self.check_common();
+        }
         if self.kit_quantity == 0 || self.kit_quantity > MAX_KITS {
             bail!(
                 "kit_quantity must be between 1 and {MAX_KITS} (got {})",
@@ -186,6 +244,20 @@ impl GoalSpec {
                 bail!("kit_components.{k}: quantity must be 1..={MAX_PER_KIND_PER_KIT} (got {n})");
             }
         }
+        for (i, t) in self.preferred_trays.iter().enumerate() {
+            let n: Option<u32> = t.strip_prefix("tray-").and_then(|n| n.parse().ok());
+            if !matches!(n, Some(1..=8)) {
+                bail!("preferred_trays: `{t}` is not a tray (tray-1 .. tray-8)");
+            }
+            if self.preferred_trays[..i].contains(t) {
+                bail!("preferred_trays: `{t}` listed twice");
+            }
+        }
+        let _ = check_parts;
+        self.check_common()
+    }
+
+    fn check_common(&self) -> Result<()> {
         for s in self
             .approved_substitutions
             .iter()
@@ -198,16 +270,39 @@ impl GoalSpec {
         if !self.ask_before_substitution {
             bail!("ask_before_substitution cannot be disabled in v0");
         }
-        for (i, t) in self.preferred_trays.iter().enumerate() {
-            let n: Option<u32> = t.strip_prefix("tray-").and_then(|n| n.parse().ok());
-            if !matches!(n, Some(1..=8)) {
-                bail!("preferred_trays: `{t}` is not a tray (tray-1 .. tray-8)");
-            }
-            if self.preferred_trays[..i].contains(t) {
-                bail!("preferred_trays: `{t}` listed twice");
+        Ok(())
+    }
+
+    /// The kits one by one (kit 1 first), whichever form the goal uses.
+    pub fn kit_specs(&self) -> Vec<KitSpec> {
+        if !self.kits.is_empty() {
+            return self.kits.clone();
+        }
+        (0..self.kit_quantity as usize)
+            .map(|i| KitSpec {
+                components: self.kit_components.clone(),
+                tray: self.preferred_trays.get(i).cloned(),
+            })
+            .collect()
+    }
+
+    /// Parts needed for kit number `kit` (1-based).
+    pub fn composition(&self, kit: u32) -> KindCounts {
+        self.kit_specs()
+            .get(kit.saturating_sub(1) as usize)
+            .map(|k| k.components.clone())
+            .unwrap_or_default()
+    }
+
+    /// Total parts over all kits.
+    pub fn total_parts(&self) -> KindCounts {
+        let mut t = KindCounts::new();
+        for k in self.kit_specs() {
+            for (kind, n) in k.components {
+                *t.entry(kind).or_default() += n;
             }
         }
-        Ok(())
+        t
     }
 
     pub fn substitute_for(&self, kind: &str) -> Vec<String> {
@@ -231,11 +326,31 @@ impl GoalSpec {
     }
 
     pub fn summary(&self) -> String {
-        let parts: Vec<String> = self
-            .kit_components
-            .iter()
-            .map(|(k, n)| format!("{n}x {k}"))
-            .collect();
+        let parts = |c: &KindCounts| {
+            c.iter()
+                .map(|(k, n)| format!("{n}x {k}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        if !self.kits.is_empty() {
+            let kits: Vec<String> = self
+                .kits
+                .iter()
+                .enumerate()
+                .map(|(i, k)| {
+                    format!(
+                        "kit {}: [{}]{}",
+                        i + 1,
+                        parts(&k.components),
+                        k.tray
+                            .as_ref()
+                            .map(|t| format!(" in {t}"))
+                            .unwrap_or_default()
+                    )
+                })
+                .collect();
+            return format!("{} kit(s): {}", self.kit_quantity, kits.join("; "));
+        }
         let trays = if self.preferred_trays.is_empty() {
             String::new()
         } else {
@@ -244,7 +359,7 @@ impl GoalSpec {
         format!(
             "{} kit(s) of [{}]{trays}",
             self.kit_quantity,
-            parts.join(", ")
+            parts(&self.kit_components)
         )
     }
 }
@@ -258,13 +373,17 @@ pub fn substitution_candidates(kind: &str) -> &'static [&'static str] {
     }
 }
 
-/// Evaluate whether tray contents satisfy a composition exactly, allowing approved
-/// substitutions. Returns (complete, missing, excess).
-pub fn evaluate_kit(contents: &KindCounts, goal: &GoalSpec) -> (bool, KindCounts, KindCounts) {
+/// Evaluate whether tray contents satisfy a composition exactly, allowing the goal's
+/// approved substitutions. Returns (complete, missing, excess).
+pub fn evaluate_against(
+    contents: &KindCounts,
+    comp: &KindCounts,
+    goal: &GoalSpec,
+) -> (bool, KindCounts, KindCounts) {
     let mut have = contents.clone();
     let mut missing = KindCounts::new();
     // First satisfy requirements with the exact kind, then with approved substitutes.
-    for (kind, need) in &goal.kit_components {
+    for (kind, need) in comp {
         let exact = have.get(kind).copied().unwrap_or(0);
         let used = exact.min(*need);
         *have.entry(kind.clone()).or_default() -= used;
@@ -275,7 +394,7 @@ pub fn evaluate_kit(contents: &KindCounts, goal: &GoalSpec) -> (bool, KindCounts
             }
             let avail = have.get(&sub).copied().unwrap_or(0);
             // Do not consume a substitute that is itself required by the composition.
-            let reserved_for_self = goal.kit_components.get(&sub).copied().unwrap_or(0);
+            let reserved_for_self = comp.get(&sub).copied().unwrap_or(0);
             let spare = avail.saturating_sub(reserved_for_self);
             let take = spare.min(short);
             *have.entry(sub.clone()).or_default() -= take;
@@ -287,6 +406,43 @@ pub fn evaluate_kit(contents: &KindCounts, goal: &GoalSpec) -> (bool, KindCounts
     }
     let excess: KindCounts = have.into_iter().filter(|(_, n)| *n > 0).collect();
     (missing.is_empty() && excess.is_empty(), missing, excess)
+}
+
+/// Which trays hold a complete kit, and for which kit number. A tray assigned to a
+/// kit is judged against that kit's parts; any other tray with contents counts for
+/// the first not-yet-matched kit whose parts it matches exactly. Returns tray -> kit.
+pub fn match_complete_kits(
+    goal: &GoalSpec,
+    trays: &[(String, KindCounts)],
+    assigned: &BTreeMap<String, u32>,
+) -> BTreeMap<String, u32> {
+    let specs = goal.kit_specs();
+    let mut done: BTreeMap<String, u32> = BTreeMap::new();
+    let mut taken = vec![false; specs.len()];
+    for (tray, contents) in trays {
+        if let Some(&k) = assigned.get(tray)
+            && k >= 1
+            && (k as usize) <= specs.len()
+            && !contents.is_empty()
+            && !taken[k as usize - 1]
+            && evaluate_against(contents, &specs[k as usize - 1].components, goal).0
+        {
+            taken[k as usize - 1] = true;
+            done.insert(tray.clone(), k);
+        }
+    }
+    for (tray, contents) in trays {
+        if done.contains_key(tray) || assigned.contains_key(tray) || contents.is_empty() {
+            continue;
+        }
+        if let Some(i) = (0..specs.len())
+            .find(|&i| !taken[i] && evaluate_against(contents, &specs[i].components, goal).0)
+        {
+            taken[i] = true;
+            done.insert(tray.clone(), i as u32 + 1);
+        }
+    }
+    done
 }
 
 /// Restricted-grammar intent parser for the scripted mode. It accepts only the
@@ -376,6 +532,7 @@ pub fn parse_restricted_request(text: &str) -> Result<GoalSpec> {
         rework_permitted: None,
         source_text: Some(text.to_string()),
         preferred_trays: vec![],
+        kits: vec![],
     };
     g.validate()?;
     Ok(g)
@@ -416,7 +573,7 @@ mod tests {
         c.insert("red_block".into(), 1);
         c.insert("green_block".into(), 1);
         c.insert("washer".into(), 2);
-        let (ok, missing, excess) = evaluate_kit(&c, &g);
+        let (ok, missing, excess) = evaluate_against(&c, &g.kit_components.clone(), &g);
         assert!(!ok);
         assert_eq!(missing.get("blue_block"), Some(&1));
         assert_eq!(excess.get("green_block"), Some(&1));
@@ -424,10 +581,10 @@ mod tests {
             replace: "blue_block".into(),
             with: "green_block".into(),
         });
-        let (ok, _, _) = evaluate_kit(&c, &g);
+        let (ok, _, _) = evaluate_against(&c, &g.kit_components.clone(), &g);
         assert!(ok);
         c.insert("washer".into(), 3);
-        let (ok, _, excess) = evaluate_kit(&c, &g);
+        let (ok, _, excess) = evaluate_against(&c, &g.kit_components.clone(), &g);
         assert!(
             !ok,
             "excess parts mean the kit does not match the composition"

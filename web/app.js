@@ -115,7 +115,14 @@ function placeName(loc, trayKit) {
   if ((loc || "").startsWith("tray-")) return trayKit[loc] ? "kit " + trayKit[loc] + " (tray " + trayNum(loc) + ")" : "tray " + trayNum(loc);
   return binName(loc);
 }
-function kitSize(goal) { return Object.values(goal.kit_components || {}).reduce((a, b) => a + b, 0); }
+// The kits one by one, whichever form the request uses (identical kits or a list).
+function kitSpecs(goal) {
+  if (Array.isArray(goal.kits) && goal.kits.length) return goal.kits.map((k) => ({ components: k.components || {}, tray: k.tray || null }));
+  const trays = goal.preferred_trays || [];
+  return Array.from({ length: goal.kit_quantity }, (_, i) => ({ components: goal.kit_components || {}, tray: trays[i] || null }));
+}
+function sizeOf(components) { return Object.values(components || {}).reduce((a, b) => a + b, 0); }
+function kitSizeFor(goal, kit) { const k = kitSpecs(goal)[kit - 1]; return k ? sizeOf(k.components) : 0; }
 
 function describeStep(a, v, trayKit) {
   const args = a.arguments || {};
@@ -201,11 +208,10 @@ function actionButton(label, fn, cls) {
 }
 
 function progress(v, trayKit) {
-  const size = kitSize(v.goal);
-  const q = v.goal.kit_quantity;
   let placed = 0;
-  for (const l of v.workspace_truth.locations.filter((x) => x.loc_type === "tray" && trayKit[x.location_id])) placed += Math.min(size, l.objects.length);
-  return { placed, total: size * q };
+  for (const l of v.workspace_truth.locations.filter((x) => x.loc_type === "tray" && trayKit[x.location_id])) placed += Math.min(kitSizeFor(v.goal, trayKit[l.location_id]), l.objects.length);
+  const total = kitSpecs(v.goal).reduce((a, k) => a + sizeOf(k.components), 0);
+  return { placed, total };
 }
 
 function renderNow(v, trayKit) {
@@ -340,7 +346,15 @@ function humanOption(q, o) {
 // ------------------------------------------------------------------ request, kits, story
 
 function goalSentence(g) {
-  return g.kit_quantity + " " + (g.kit_quantity === 1 ? "kit" : "kits") + ", each with " + countsText(g.kit_components);
+  const specs = kitSpecs(g);
+  const trayText = (t) => (t ? " in tray " + trayNum(t) : "");
+  const uniform = !(Array.isArray(g.kits) && g.kits.length);
+  if (uniform) {
+    const trays = specs.map((k) => k.tray).filter(Boolean);
+    return g.kit_quantity + " " + (g.kit_quantity === 1 ? "kit" : "kits") + (g.kit_quantity === 1 ? " with " : ", each with ") + countsText(g.kit_components) +
+      (trays.length ? ", in " + listJoin(trays.map((t) => "tray " + trayNum(t))) : "");
+  }
+  return specs.length + " kits: " + listJoin(specs.map((k, i) => "kit " + (i + 1) + " with " + countsText(k.components) + trayText(k.tray)));
 }
 
 function renderGoal(v) {
@@ -365,12 +379,12 @@ function renderGoal(v) {
     $("c-washer").value = g.kit_components.washer || 0;
   }
   $("change-goal").hidden = ["completed", "partial", "stopped", "failed"].includes(v.state.status);
+  $("mixed-note").hidden = !(Array.isArray(g.kits) && g.kits.length);
 }
 
 function renderKits(v, trayKit) {
   const ul = $("kits");
   clear(ul);
-  const size = kitSize(v.goal);
   const report = v.state.final_report;
   const verified = new Set((report && report.claims_source !== "agent" && report.kits_verified_complete) || []);
   const byKit = {};
@@ -379,6 +393,7 @@ function renderKits(v, trayKit) {
     const tray = byKit[k];
     const loc = tray && v.workspace_truth.locations.find((l) => l.location_id === tray);
     const n = loc ? loc.objects.length : 0;
+    const size = kitSizeFor(v.goal, k);
     let state, cls;
     if (!tray) { state = "not planned"; cls = "wait"; }
     else if (verified.has(tray)) {
@@ -390,7 +405,9 @@ function renderKits(v, trayKit) {
     else if (n > 0) { state = n + " of " + size + " parts"; cls = "wait"; }
     else { state = "not started"; cls = "wait"; }
     if (loc && !loc.available) { state += " (tray unavailable)"; cls = "warn"; }
-    ul.append(h("li", {}, h("span", {}, "Kit " + k + (tray ? " · tray " + trayNum(tray) : "")), h("span", { class: "state " + cls }, state)));
+    const mixed = Array.isArray(v.goal.kits) && v.goal.kits.length;
+    const what = mixed ? " (" + countsText(kitSpecs(v.goal)[k - 1].components) + ")" : "";
+    ul.append(h("li", {}, h("span", {}, "Kit " + k + (tray ? " · tray " + trayNum(tray) : "") + what), h("span", { class: "state " + cls }, state)));
   }
   const reserved = v.inventory && Object.values(v.inventory.reserved || {}).some((n) => n > 0);
   $("stock-line").textContent = stockSentence(v) + (reserved ? " Set aside for this job: " + countsText(v.inventory.reserved) + "." : "");
@@ -399,7 +416,6 @@ function renderKits(v, trayKit) {
 function storyLines(v, trayKit) {
   const events = v.events.slice().reverse();
   const base = events.length ? events[0].at_ms : 0;
-  const size = kitSize(v.goal);
   const stepById = {};
   for (const a of v.steps || []) stepById[a.action_id] = a;
   const perTray = {};
@@ -464,7 +480,7 @@ function storyLines(v, trayKit) {
           const dst = (a.arguments || {}).destination_id || "";
           if (dst.startsWith("tray-")) {
             perTray[dst] = (perTray[dst] || 0) + 1;
-            if (perTray[dst] === size) add("All parts are in " + placeName(dst, trayKit) + ".", "", e);
+            if (trayKit[dst] && perTray[dst] === kitSizeFor(v.goal, trayKit[dst])) add("All parts are in " + placeName(dst, trayKit) + ".", "", e);
           }
         }
         break;
@@ -690,9 +706,8 @@ function wire() {
       const r = await api("POST", "/api/interpret", { text });
       const cost = r.cost_usd_estimate != null ? " · cost about $" + Number(r.cost_usd_estimate).toFixed(3) : "";
       if (r.understood && r.goal) {
-        const trays = (r.goal.preferred_trays || []).map((t) => "tray " + trayNum(t));
-        $("interp-title").textContent = "I understood: " + goalSentence(r.goal) + (trays.length ? ", in " + listJoin(trays) : "") + ".";
-        $("interp-detail").textContent = (r.not_supported ? "Not possible here: " + r.not_supported + " " : "") + "(read by " + r.by + cost + ")";
+        $("interp-title").textContent = "I understood: " + goalSentence(r.goal) + ".";
+        $("interp-detail").textContent = (r.assumptions ? "Assumed: " + r.assumptions + " " : "") + (r.not_supported ? "Not possible here: " + r.not_supported + " " : "") + "(read by " + r.by + cost + ")";
         $("interp-actions").append(
           actionButton("Yes, start", () => startRun(r.goal), "big"),
           actionButton("Change my words", () => { box.hidden = true; $("new-request").focus(); }, "ghost"));

@@ -370,3 +370,60 @@ fn preferred_trays_are_honoured_and_validated() {
     .unwrap();
     assert!(bad.validate().is_err());
 }
+
+#[test]
+fn different_kits_in_one_request_on_both_arms() {
+    // "One kit with red blocks, one with blue blocks and one with washers (in tray 4)."
+    let goal: GoalSpec = serde_json::from_value(json!({
+        "kit_quantity": 3, "kit_components": {},
+        "kits": [
+            {"components": {"red_block": 2}},
+            {"components": {"blue_block": 2}},
+            {"components": {"washer": 2}, "tray": "tray-4"}
+        ]
+    }))
+    .unwrap();
+    goal.validate().unwrap();
+    for arm in [Arm::Revolve, Arm::Baseline] {
+        let state = temp_state("mixed");
+        let mut sc = load("nominal");
+        sc.goal = goal.clone();
+        let (_run, dir) = new_run(&state, &sc, arm, "interactive");
+        let status = revolve::harness::drive_in_process(
+            &dir,
+            ExecOptions {
+                quiet: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(status, R_COMPLETED, "{arm:?}");
+        let v = revolve::eval::evaluate_run(&dir).unwrap();
+        assert_eq!(
+            v.kits_truly_complete.len(),
+            3,
+            "{arm:?}: {}",
+            revolve::eval::summarize_verdict(&v)
+        );
+        assert!(
+            v.kits_truly_complete.contains(&"tray-4".to_string()),
+            "the washer kit goes where it was asked"
+        );
+        assert!(
+            v.inventory_correct && v.invariant_violations.is_empty(),
+            "{}",
+            revolve::eval::summarize_verdict(&v)
+        );
+    }
+    // A kit list must agree with kit_quantity, and each kit must have parts.
+    let bad: GoalSpec = serde_json::from_value(
+        json!({"kit_quantity": 2, "kit_components": {}, "kits": [{"components": {"washer": 1}}]}),
+    )
+    .unwrap();
+    assert!(bad.validate().is_err());
+    let empty_kit: GoalSpec = serde_json::from_value(
+        json!({"kit_quantity": 1, "kit_components": {}, "kits": [{"components": {}}]}),
+    )
+    .unwrap();
+    assert!(empty_kit.validate().is_err());
+}

@@ -6,7 +6,9 @@
 
 use crate::harness::{self, Arm, PlannerChoice};
 use crate::inventory;
-use crate::model::{GRIPPER, KNOWN_KINDS, KindCounts, LocationType, UNKNOWN_KIND, evaluate_kit};
+use crate::model::{
+    GRIPPER, KNOWN_KINDS, KindCounts, LocationType, UNKNOWN_KIND, match_complete_kits,
+};
 use crate::policy::Policy;
 use crate::scenario::{self, Scenario};
 use crate::sim::SimWorld;
@@ -95,17 +97,23 @@ pub fn evaluate_run(dir: &Path) -> Result<Verdict> {
             .and_then(|n| n.parse::<u32>().ok())
             .unwrap_or(0)
     });
-    let mut truly = vec![];
-    for t in &trays {
-        let mut c = KindCounts::new();
-        for o in truth.objects.iter().filter(|o| &o.location_id == t) {
-            *c.entry(o.true_kind.clone()).or_default() += 1;
-        }
-        if !c.is_empty() && evaluate_kit(&c, &goal).0 {
-            truly.push(t.clone());
-        }
-    }
-    truly.truncate(goal.kit_quantity as usize);
+    // Match trays to kits from true contents alone (each kit counted once).
+    let contents: Vec<(String, KindCounts)> = trays
+        .iter()
+        .map(|t| {
+            let mut c = KindCounts::new();
+            for o in truth.objects.iter().filter(|o| &o.location_id == t) {
+                *c.entry(o.true_kind.clone()).or_default() += 1;
+            }
+            (t.clone(), c)
+        })
+        .collect();
+    let matched = match_complete_kits(&goal, &contents, &std::collections::BTreeMap::new());
+    let truly: Vec<String> = trays
+        .iter()
+        .filter(|t| matched.contains_key(*t))
+        .cloned()
+        .collect();
     v.kits_truly_complete = truly.clone();
 
     // ---- claims

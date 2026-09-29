@@ -23,7 +23,7 @@ use crate::ir::{
 };
 use crate::model::{
     Classification, GRIPPER, GoalSpec, KindCounts, LocationType, Observation, bin_for_kind,
-    effective_kind, evaluate_kit,
+    effective_kind, evaluate_against,
 };
 use crate::policy::Policy;
 use serde::Serialize;
@@ -846,15 +846,12 @@ pub fn compile(p: &PlanProposal, ctx: &CompileContext) -> Result<CompiledPlan, V
             ));
         }
     }
-    let assigned: BTreeSet<String> = h
+    // Each assigned tray is judged against its own kit's parts.
+    let predicted: BTreeSet<String> = h
         .kit_assignments
         .iter()
-        .map(|k| k.tray_id.clone())
-        .collect();
-    let predicted: BTreeSet<String> = assigned
-        .iter()
-        .filter(|t| belief.tray_complete(t, ctx.goal))
-        .cloned()
+        .filter(|ka| belief.tray_complete(&ka.tray_id, &ctx.goal.composition(ka.kit), ctx.goal))
+        .map(|ka| ka.tray_id.clone())
         .collect();
     let claimed: BTreeSet<String> = h.expected_outcome.kits_complete.iter().cloned().collect();
     for t in claimed.difference(&predicted) {
@@ -948,14 +945,14 @@ impl<'a> Belief<'a> {
             .map(|(o, _)| o.clone())
     }
 
-    fn tray_complete(&self, tray: &str, goal: &GoalSpec) -> bool {
+    fn tray_complete(&self, tray: &str, comp: &KindCounts, goal: &GoalSpec) -> bool {
         let mut c = KindCounts::new();
         for (o, l) in &self.loc {
             if l == tray {
                 *c.entry(self.kind[o].clone()).or_default() += 1;
             }
         }
-        !c.is_empty() && evaluate_kit(&c, goal).0
+        !c.is_empty() && !comp.is_empty() && evaluate_against(&c, comp, goal).0
     }
 
     fn holds(&self, c: &Condition, goal_rev: u32) -> Result<(), String> {
