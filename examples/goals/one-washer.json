@@ -1,0 +1,5 @@
+{
+  "kit_quantity": 3,
+  "kit_components": {"red_block": 1, "blue_block": 1, "washer": 1},
+  "source_text": "Use one washer per kit instead of two."
+}

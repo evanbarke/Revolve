@@ -149,6 +149,8 @@ impl BudgetLedger {
 pub struct LivePlanner {
     pub config: LiveConfig,
     budget: BudgetLedger,
+    /// Only set by unit tests against a local fake endpoint; production reads the env var.
+    test_key: Option<String>,
 }
 
 const PLAN_SYSTEM: &str = r#"You are the planner for Revolve, an execution runtime for a small simulated kit-assembly workspace.
@@ -377,6 +379,7 @@ impl LivePlanner {
             });
         }
         Ok(LivePlanner {
+            test_key: None,
             config,
             budget: BudgetLedger::open(budget_path),
         })
@@ -390,7 +393,12 @@ impl LivePlanner {
     ) -> (std::result::Result<Value, PlannerError>, CallInfo) {
         let started = Instant::now();
         let mut info = CallInfo::default();
-        let key = match std::env::var(&self.config.api_key_env) {
+        let key = match self
+            .test_key
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| std::env::var(&self.config.api_key_env))
+        {
             Ok(k) if !k.trim().is_empty() => k,
             _ => {
                 return (
@@ -621,5 +629,146 @@ mod tests {
         assert!(!b.try_consume());
         assert_eq!(b.status(), Some((2, 2)));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- HTTP path against a LOCAL FAKE endpoint (not the provider; no network egress).
+
+    fn fake_server(
+        responses: Vec<(u16, Value)>,
+    ) -> (
+        String,
+        std::thread::JoinHandle<Vec<(Vec<(String, String)>, Value)>>,
+    ) {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/v1/messages",
+            server.server_addr().to_ip().unwrap()
+        );
+        let h = std::thread::spawn(move || {
+            let mut seen = vec![];
+            for (status, body) in responses {
+                let Ok(Some(mut req)) = server.recv_timeout(std::time::Duration::from_secs(10))
+                else {
+                    break;
+                };
+                let headers = req
+                    .headers()
+                    .iter()
+                    .map(|h| (h.field.to_string().to_lowercase(), h.value.to_string()))
+                    .collect();
+                let mut b = String::new();
+                let _ = std::io::Read::read_to_string(req.as_reader(), &mut b);
+                seen.push((headers, serde_json::from_str(&b).unwrap_or(Value::Null)));
+                let _ = req.respond(
+                    tiny_http::Response::from_string(body.to_string()).with_status_code(status),
+                );
+            }
+            seen
+        });
+        (url, h)
+    }
+
+    fn fake_planner(url: &str, budget: u32, retries: u32) -> (LivePlanner, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("revolve-live-{}", crate::util::fresh_id("t")));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bpath = dir.join("budget.json");
+        BudgetLedger::init(&bpath, budget).unwrap();
+        let config = LiveConfig {
+            provider: "anthropic".into(),
+            model: "fake-model".into(),
+            endpoint: url.into(),
+            api_key_env: "UNUSED_IN_THIS_TEST".into(),
+            anthropic_version: "2023-06-01".into(),
+            effort: Some("high".into()),
+            max_tokens: 1000,
+            timeout_ms: 5000,
+            max_response_bytes: 100_000,
+            max_transport_retries: retries,
+            refusal_fallback: None,
+            pricing: None,
+        };
+        (
+            LivePlanner {
+                config,
+                budget: BudgetLedger::open(&bpath),
+                test_key: Some("test-key".into()),
+            },
+            bpath,
+        )
+    }
+
+    fn ok_plan_body() -> Value {
+        fixture(
+            json!({"decision": "unable", "plan_json": "", "clarification": {"kind":"other","prompt":"","options":[],"context_json":"{}"}, "reason": "fixture"}),
+            "end_turn",
+        )
+    }
+
+    #[test]
+    fn http_retries_overload_then_succeeds_within_budget() {
+        let (url, h) = fake_server(vec![
+            (
+                529,
+                json!({"type":"error","error":{"type":"overloaded_error","message":"busy"}}),
+            ),
+            (200, ok_plan_body()),
+        ]);
+        let (mut p, bpath) = fake_planner(&url, 5, 2);
+        let (r, info) = p.call("sys", &json!({"hello": "world"}), plan_schema());
+        let env = r.expect("second attempt succeeds");
+        assert_eq!(env["decision"], "unable");
+        assert_eq!(info.transport_attempts, 2);
+        assert_eq!(info.usage, Some((1200, 340)));
+        assert_eq!(
+            BudgetLedger::open(&bpath).status(),
+            Some((5, 2)),
+            "each HTTP attempt consumes budget"
+        );
+        let seen = h.join().unwrap();
+        let (headers, body) = &seen[1];
+        let get = |k: &str| {
+            headers
+                .iter()
+                .find(|(n, _)| n == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("x-api-key"), Some("test-key"));
+        assert_eq!(get("anthropic-version"), Some("2023-06-01"));
+        assert_eq!(body["model"], "fake-model");
+        assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+        assert_eq!(body["output_config"]["effort"], "high");
+        assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn http_client_errors_are_not_retried() {
+        let (url, h) = fake_server(vec![(
+            401,
+            json!({"type":"error","error":{"type":"authentication_error","message":"bad key"}}),
+        )]);
+        let (mut p, bpath) = fake_planner(&url, 5, 3);
+        let (r, info) = p.call("sys", &json!({}), plan_schema());
+        assert!(
+            matches!(r, Err(PlannerError::NotConfigured { .. })),
+            "{r:?}"
+        );
+        assert_eq!(info.transport_attempts, 1);
+        assert_eq!(BudgetLedger::open(&bpath).status(), Some((5, 1)));
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn http_budget_stops_retries() {
+        let (url, h) = fake_server(vec![(
+            529,
+            json!({"type":"error","error":{"type":"overloaded_error","message":"busy"}}),
+        )]);
+        let (mut p, _bpath) = fake_planner(&url, 1, 3);
+        let (r, _) = p.call("sys", &json!({}), plan_schema());
+        assert!(
+            matches!(r, Err(PlannerError::BudgetExhausted { .. })),
+            "{r:?}"
+        );
+        h.join().unwrap();
     }
 }

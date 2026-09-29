@@ -1,0 +1,15 @@
+# Optional user-level systemd unit for the Revolve UI (loopback only).
+# Not installed automatically. Install with:
+#   mkdir -p ~/.config/systemd/user && cp deploy/revolve-ui.user.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user start revolve-ui
+# Reach it from another machine with an SSH tunnel (see docs/jetson.md).
+[Unit]
+Description=Revolve UI (loopback only)
+
+[Service]
+WorkingDirectory=%h/revolve/src
+ExecStart=%h/revolve/target/release/revolve --state-dir %h/revolve/state serve --bind 127.0.0.1:8765
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
