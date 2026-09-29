@@ -1,6 +1,11 @@
 # Current state (handoff)
 
-_Last updated: 2026-09-29, first build session (after vision step 1: plans compiled to native code)._
+_Last updated: 2026-09-29, first build session (after vision step 2: the AI writes programs; see `docs/programs.md`)._
+
+**To try it:** `revolve serve`, open http://127.0.0.1:8080, pick "A messy table",
+type what you want and press **Write the program** (or pick an example, no AI).
+Then read what was checked and rehearsed and press **Run it for real**. While it
+runs, try **Simulate a power cut** and **Change what it's doing**.
 
 The goal these milestones serve is in `docs/vision.md`: human intent → program →
 compiled code → robot movement, with the human in the loop. VR,
@@ -16,14 +21,20 @@ thoughts-to-action and a wearable Jetson are later stages.
 | M3 AI experiment & demo | done for offline — scripted planner, live adapter (untested against the provider), baseline, UI, benchmark; **live-model comparison not performed** |
 | M4 Jetson | executed on the device — native build, full tests, demos, crash recovery, planner loss, measurements, UI via SSH tunnel |
 | Vision step 1: compile to real code | done — checked plans compile to WebAssembly → native code (Cranelift); default engine; 62/62 scenarios identical to the interpreter on Windows and the Jetson (`docs/codegen.md`) |
+| Vision step 2: a real language | done (v1) — Revolve Script: Python-shaped, loops/branches/functions/comprehensions; checked against the table and policy; compiled to Wasm → native; run one outside-world call at a time with deterministic replay; rehearsal on a digital twin; the AI writes programs from words (live check: 5/5 accepted first try, 1 correct refusal, 1 mid-run change; 7 calls, ~$0.24); UI with live line highlight and an animated arm (`docs/programs.md`, `docs/language.md`) |
 | M5, M6 | not started; see `docs/roadmap.md` |
 
 ## Verified commands (this session)
 
 On Windows (debug and release) and on the Jetson (release):
 
-- `cargo test` — 60 tests pass on Windows and on the Jetson (31 unit, 29
-  integration), with the compiled engine as the default.
+- `cargo test` — 79 tests pass on Windows (42 unit, 37 integration). The Jetson
+  ran the 60 that existed at vision step 1; see "Jetson" below for step 2.
+- `revolve script check|run` on the three example programs and the four
+  playground tables (power cut: 2 executor processes, 11 moves, none repeated;
+  thief: the missing part reported, program completed).
+- UI program flow checked in headless Edge screenshots (review card, running
+  line highlight and arm, power cut and recovery, question, completion).
 - Engine equivalence — `scripts/compare_engines.py` on the development,
   held-out and demo suites: 62/62 trials identical (verdict, every action with
   arguments and result, final world) on Windows and on the Jetson.
@@ -96,14 +107,14 @@ server unit tests.
   straight-line, so they cannot yet do anything the interpreter cannot (see
   `docs/codegen.md`, "Limits").
 
-## Next concrete task
+## Next concrete tasks
 
-Vision step 2, **a real language**. The AI writes programs with loops, branches
-and functions. The compiler must check them itself, because translation
-validation against a step list no longer applies (termination, resource bounds,
-permissions on every path). Each program is explained back to the person in
-plain words before it runs. Then compare it with an AI writing Python directly
-against the same capabilities: first-try compile rate, repair rounds, cost and
-correctness under faults. The comparison needs an approved API budget.
-
-Still open from M3 (needs a budget): the live fault scenarios on both arms.
+1. **Vision step 3: movement in simulation.** Give the arm joints, reach, speed
+   limits and collision checks. Programs keep calling pick/place, and the
+   compiler/rehearsal proves every motion stays within limits before the arm
+   moves. The browser arm already shows where this goes.
+2. **Measure "optimized for the AI".** Run the step-2 comparison: Revolve Script
+   against an AI writing Python directly against the same capabilities, across
+   the playground and fault tables (first-try acceptance, repairs, cost,
+   correctness under faults). Needs an approved budget.
+3. **Still open from M3 (needs a budget):** the live fault scenarios on both arms.

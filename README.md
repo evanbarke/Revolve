@@ -1,6 +1,16 @@
 # Revolve
 
-Revolve is a prototype execution runtime. You state a goal; a planner proposes
+**Tell a (simulated) robot arm what to do in your own words.** The AI writes a
+short program; the compiler checks it against the table and the safety policy,
+compiles it to machine code and rehearses it on a digital twin; you decide; it
+runs crash-safe, with the running line highlighted. See `docs/programs.md` and
+the vision in `docs/vision.md`.
+
+```
+cargo build --release && ./target/release/revolve serve     # http://127.0.0.1:8080
+```
+
+Underneath, Revolve is a prototype execution runtime. You state a goal; a planner proposes
 an explicit, versioned plan (the **Action IR**); a compiler checks it against
 capability contracts, a runtime-held policy and the observed world; a
 persistent executor carries it out step by step, survives crashes and unknown
@@ -67,6 +77,8 @@ revolve new --scenario <name> [--plan file] [--scripted-human]      # create onl
 revolve run --scenario nominal --plan examples/plans/kit-assembly.json
 revolve validate --plan examples/plans/invalid-cycle.json [--scenario nominal]
 revolve build --plan examples/plans/kit-assembly.json --out kit.wasm [--native kit.cwasm]  # plan -> program -> machine code
+revolve script check --file examples/programs/trays-by-color.rvs --scenario messy-table     # check + rehearse
+revolve script run --file examples/programs/sort-to-bins.rvs --scenario messy-table-power-cut
 revolve resume --run <id>            # the executor; also recovers after a crash
 revolve status [--run <id>] [--json]
 revolve evaluate --run <id> [--json]  # score a run against simulator truth
@@ -111,6 +123,8 @@ cargo clippy --all-targets && cargo fmt --check
 ## Documentation
 
 - `docs/vision.md` — the goal: human intent → compiled code → robot movement, and the proposed path
+- `docs/programs.md` — the AI writes programs; checks, rehearsal, replay, the UI, evidence
+- `docs/language.md` — Revolve Script (also the exact guide the AI receives)
 - `docs/codegen.md` — plans compiled to WebAssembly / native code: ABI, replay, validation, evidence
 - `docs/architecture.md` — runtime boundary and what the compiler does
 - `docs/action-ir.md` — Action IR v1 and capability contracts

@@ -42,8 +42,8 @@ never become an unchecked movement.
 
 | part | state |
 | --- | --- |
-| Understand intent | partial: own words → structured goal, confirmation, questions, mid-run corrections; one domain (kit assembly) |
-| Language for AI authors | partial: Action IR has typed steps and structured errors the AI repairs from; no loops or functions |
+| Understand intent | words → a program the AI writes for the table as it is, explained back in plain words, checked and rehearsed before the person decides; questions at run time; mid-run changes (pause, new program, switch) |
+| Language for AI authors | **built (v1)**: Revolve Script, Python-shaped, with loops, branches, functions and required success checks; checker messages with line numbers the AI repairs from (`docs/language.md`, `docs/programs.md`) |
 | Compiler front end | built: parse, types, references, permissions, abstract execution |
 | Code generation | **step 1 built**: checked plans compile to WebAssembly → native code (x86_64 and the Jetson's aarch64), identical results to the interpreter on all 62 scenarios; programs are still straight-line (`docs/codegen.md`) |
 | Crash-safe runtime | built: durable log, no repeated effects, recovery, verification from observation |
@@ -57,10 +57,13 @@ never become an unchecked movement.
    imports, and crash recovery is replay. The pass criterion was met: 62/62
    scenarios are identical to the interpreter on Windows and on the Jetson.
    See `docs/codegen.md`.
-2. **A real language.** Add loops, branches and functions, and explain programs
-   back in plain words before they run. Compare with an AI writing Python
-   directly against the same capabilities (first-try compile rate, repair
-   rounds, cost, correctness under faults). Needs an API budget.
+2. **A real language. Built 2026-09-29 (v1).** Revolve Script programs are
+   written by the AI from the person's words and explained back in plain words.
+   They are checked against the table and policy, compiled to native code,
+   rehearsed on a digital twin, and run with deterministic replay (see
+   `docs/programs.md`). Still to do: the comparison with an AI writing Python
+   directly (first-try acceptance, repairs, cost, correctness under faults),
+   which needs an API budget.
 3. **Movement in simulation.** Add a simulated arm with joints, reach, speed
    limits and collisions. The compiler proves a program stays within limits;
    the safety layer enforces them at run time.

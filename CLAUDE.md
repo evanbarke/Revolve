@@ -20,6 +20,7 @@ revolve serve                                # UI, loopback only
 python scripts/gen_scenarios.py              # regenerate scenario fixtures
 python scripts/make_example_plans.py         # regenerate examples/plans
 revolve build --plan <file> --out x.wasm     # plan -> Wasm program (+ --native)
+revolve script check|run --file examples/programs/<x>.rvs --scenario messy-table
 python scripts/compare_engines.py <state> <resultsA> <resultsB>   # engine equivalence
 ```
 
@@ -45,6 +46,11 @@ Pipe files over ssh stdin; PowerShell pipes add CRLF.
   first undone step and the executor dispatches it through the normal path. Every
   program request is validated against the checked plan, and a module may import
   only `rt.*` and granted `cap.*`. Keep codegen deterministic (tests compare bytes).
+- Revolve Script programs: every outside-world call (look, pick, place, ask, say,
+  expect) is one logged action; replay must retrace the log or the run blocks;
+  refused moves return False; completion only from `expect` checks made by looking.
+  `docs/language.md` is sent verbatim to the AI: keep it accurate and short.
+- Writing a replacement for a running program pauses the run first.
 - Inventory `on_hand` = known parts not yet consumed (bins + gripper + trays awaiting record).
 - Label scripted vs live everywhere; never substitute scripted for a selected live planner.
 - No live model calls without an explicit, user-approved budget.

@@ -108,6 +108,26 @@ or denied step is replanned instead of continued. Before, a crash between
 recording a failure and replacing the plan left a hole that the interpreter
 skipped. No benchmark result changed.
 
+**D17 — The AI writes a Python-shaped language, not JSON or Python.**
+- **Python-shaped:** models write Python fluently, which keeps first-try
+  acceptance high (5/5 in the first live check).
+- **Not a JSON AST:** it is verbose, hard for people to read and error-prone
+  for models on nested control flow.
+- **Not real Python:** it cannot be checked or bounded, and it reaches
+  everything.
+
+The restrictions (no while, no recursion, loops over fixed lists, required
+`expect` checks, only built-in actions) are chosen so that the checker can make
+the claims shown to the person.
+
+- **Execution:** every outside-world call is one logged action, and the program
+  is replayed from the top after interruptions. Refused moves are values.
+  Completion comes only from the program's own checks, made by looking.
+- **Rehearsal:** a real run on a `VACUUM INTO` copy with faults removed, so the
+  person sees what will happen before deciding.
+- **Changing a running program:** it pauses first. Live testing showed that
+  otherwise the old program keeps moving while the new one is written.
+
 **D13 — Restricted grammar, not NLU, in scripted mode.** `parse-request` and
 the UI accept only the kit family's phrasing and refuse anything else rather
 than guessing.
