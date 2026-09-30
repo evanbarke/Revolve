@@ -18,6 +18,11 @@
 //! access key, once in the link (`/?key=...`) and then as a SameSite=Strict,
 //! HttpOnly cookie. The key is 128 random bits kept in the state directory.
 //! Requests from this computer (loopback) need no key.
+//!
+//! Behind a reverse proxy (`serve --lan --public-host <name>`): the proxy is the
+//! peer (a private address), it sends the public host name, and it adds the
+//! access key as `X-Revolve-Key` after its own authentication (e.g. a password).
+//! Actions must then come from exactly `https://<name>`.
 
 use crate::harness::{self, Arm, PlannerChoice};
 use crate::inventory;
@@ -64,6 +69,8 @@ fn build_id() -> &'static str {
 struct Ctx {
     /// LAN mode: the access key other devices must present.
     lan_key: Option<String>,
+    /// The one DNS name accepted as Host (behind a reverse proxy).
+    public_host: Option<String>,
     state_dir: PathBuf,
     scenarios_dir: PathBuf,
     step_delay_ms: u64,
@@ -151,6 +158,35 @@ pub fn mutation_allowed_lan(
     Ok(())
 }
 
+/// Boundary for actions arriving through the reverse proxy for `public_host`.
+pub fn mutation_allowed_public(
+    host: Option<&str>,
+    origin: Option<&str>,
+    client: Option<&str>,
+    public_host: &str,
+) -> std::result::Result<(), &'static str> {
+    if client != Some("ui") {
+        return Err("missing X-Revolve-Client header");
+    }
+    if host != Some(public_host) {
+        return Err("unexpected Host header");
+    }
+    if let Some(o) = origin
+        && o != format!("https://{public_host}")
+    {
+        return Err("cross-origin request refused");
+    }
+    Ok(())
+}
+
+fn valid_host_name(h: &str) -> bool {
+    !h.is_empty()
+        && h.len() <= 253
+        && h.contains('.')
+        && h.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+}
+
 fn same_secret(a: &str, b: &str) -> bool {
     a.len() == b.len()
         && a.bytes()
@@ -177,7 +213,7 @@ fn lan_key(state_dir: &Path) -> Result<String> {
 }
 
 pub fn serve(bind: &str, state_dir: &Path, scenarios_dir: &Path, step_delay_ms: u64) -> Result<()> {
-    serve_with(bind, state_dir, scenarios_dir, step_delay_ms, false)
+    serve_with(bind, state_dir, scenarios_dir, step_delay_ms, false, None)
 }
 
 pub fn serve_with(
@@ -186,7 +222,16 @@ pub fn serve_with(
     scenarios_dir: &Path,
     step_delay_ms: u64,
     lan: bool,
+    public_host: Option<String>,
 ) -> Result<()> {
+    if let Some(h) = &public_host {
+        if !lan {
+            crate::bail!("--public-host needs --lan (the proxy connects over the private network)");
+        }
+        if !valid_host_name(h) {
+            crate::bail!("--public-host must be a plain DNS name like revolve.example.com");
+        }
+    }
     let addr = if lan {
         check_bind_lan(bind)?
     } else {
@@ -198,6 +243,7 @@ pub fn serve_with(
         Server::http(addr).map_err(|e| Error::new(format!("cannot listen on {addr}: {e}")))?;
     let ctx = Arc::new(Ctx {
         lan_key: key.clone(),
+        public_host: public_host.clone(),
         state_dir: state_dir.to_path_buf(),
         scenarios_dir: scenarios_dir.to_path_buf(),
         step_delay_ms,
@@ -308,8 +354,11 @@ fn handle(ctx: &Arc<Ctx>, mut req: Request) {
     let from_here = peer.is_some_and(|ip| ip.is_loopback());
     // DNS-rebinding guard for every request, reads included: only loopback Host
     // names (or, in LAN mode, IP addresses).
-    let host_ok =
-        |h: &str| is_loopback_authority(h) || (ctx.lan_key.is_some() && is_ip_authority(h));
+    let host_ok = |h: &str| {
+        is_loopback_authority(h)
+            || (ctx.lan_key.is_some() && is_ip_authority(h))
+            || ctx.public_host.as_deref() == Some(h)
+    };
     if !get_header(&req, "Host").is_some_and(host_ok) {
         return json_resp(req, 403, &json!({"error": "unexpected Host header"}));
     }
@@ -359,7 +408,9 @@ fn handle(ctx: &Arc<Ctx>, mut req: Request) {
                 .filter_map(|kv| kv.trim().strip_prefix("revolve_key="))
                 .any(|v| same_secret(v, key))
         });
-        if !cookie_ok {
+        // A reverse proxy adds the key after its own authentication.
+        let proxy_ok = get_header(&req, "X-Revolve-Key").is_some_and(|v| same_secret(v, key));
+        if !cookie_ok && !proxy_ok {
             return respond(req, 401, "text/plain; charset=utf-8", "This page needs the access link printed by `revolve serve --lan` on the computer running Revolve.".into());
         }
     }
@@ -385,17 +436,27 @@ fn handle(ctx: &Arc<Ctx>, mut req: Request) {
             _ => {}
         }
     }
-    let boundary = if ctx.lan_key.is_some() {
-        mutation_allowed_lan
-    } else {
-        mutation_allowed
-    };
-    if method == Method::Post
-        && let Err(why) = boundary(
-            get_header(&req, "Host"),
+    let host = get_header(&req, "Host");
+    let checked = match ctx.public_host.as_deref() {
+        Some(p) if host == Some(p) => mutation_allowed_public(
+            host,
             get_header(&req, "Origin"),
             get_header(&req, "X-Revolve-Client"),
-        )
+            p,
+        ),
+        _ if ctx.lan_key.is_some() => mutation_allowed_lan(
+            host,
+            get_header(&req, "Origin"),
+            get_header(&req, "X-Revolve-Client"),
+        ),
+        _ => mutation_allowed(
+            host,
+            get_header(&req, "Origin"),
+            get_header(&req, "X-Revolve-Client"),
+        ),
+    };
+    if method == Method::Post
+        && let Err(why) = checked
     {
         return json_resp(req, 403, &json!({"error": why}));
     }
@@ -1396,6 +1457,38 @@ mod tests {
         );
         assert!(
             same_secret("abc", "abc") && !same_secret("abc", "abd") && !same_secret("abc", "ab")
+        );
+    }
+
+    #[test]
+    fn behind_a_proxy_only_the_public_host_and_its_https_origin_are_accepted() {
+        let ui = Some("ui");
+        let p = "revolve.example.com";
+        assert!(
+            mutation_allowed_public(Some(p), Some("https://revolve.example.com"), ui, p).is_ok()
+        );
+        assert!(mutation_allowed_public(Some(p), None, ui, p).is_ok());
+        assert!(
+            mutation_allowed_public(Some(p), Some("http://revolve.example.com"), ui, p).is_err(),
+            "plain http origin"
+        );
+        assert!(
+            mutation_allowed_public(Some(p), Some("https://evil.example"), ui, p).is_err(),
+            "other origin"
+        );
+        assert!(
+            mutation_allowed_public(Some("evil.example"), None, ui, p).is_err(),
+            "other host"
+        );
+        assert!(
+            mutation_allowed_public(Some(p), None, None, p).is_err(),
+            "custom header"
+        );
+        assert!(
+            valid_host_name(p)
+                && !valid_host_name("x")
+                && !valid_host_name("a b.com")
+                && !valid_host_name("x.com/")
         );
     }
 

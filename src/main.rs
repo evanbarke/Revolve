@@ -214,6 +214,11 @@ enum Cmd {
         /// each with the access key printed at start. Never public addresses.
         #[arg(long)]
         lan: bool,
+        /// Behind a reverse proxy on the private network: the public DNS name it
+        /// serves. The proxy authenticates people and adds the access key as
+        /// the X-Revolve-Key header. Needs --lan.
+        #[arg(long)]
+        public_host: Option<String>,
     },
     /// Revolve Script programs: check, rehearse and run (see docs/language.md).
     Script {
@@ -834,6 +839,7 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
             bind,
             step_delay_ms,
             lan,
+            public_host,
         } => {
             let bind = bind.unwrap_or_else(|| {
                 if lan {
@@ -842,7 +848,14 @@ fn real_main(cli: Cli) -> Result<ExitCode> {
                     "127.0.0.1:8080".into()
                 }
             });
-            server::serve_with(&bind, sd, &cli.scenarios_dir, step_delay_ms, lan)?;
+            server::serve_with(
+                &bind,
+                sd,
+                &cli.scenarios_dir,
+                step_delay_ms,
+                lan,
+                public_host,
+            )?;
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Script { cmd } => script_cmd(cmd, sd, &cli.scenarios_dir),
