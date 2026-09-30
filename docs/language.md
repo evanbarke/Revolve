@@ -38,10 +38,11 @@ Every move is checked by the safety policy before the arm acts.
 | `move(part, to)` | picks the part up from where it is and puts it at `to` (a place id or a place); returns True if it worked |
 | `pick(part)` / `place(part, to)` | the two halves of `move` |
 
-A move that cannot be done returns False and does nothing: for example, the part
-is gone, the place is unavailable, or a bin does not accept that kind. Check the
-result when it matters. If the arm may already hold a part (for example, when
-continuing earlier work), deal with `holding()` first.
+A move that cannot be done returns False. If the part is gone, the place is
+unavailable, or a bin does not accept that kind, `move` finds out before picking
+anything up, so nothing happens. A `place` refused after a `pick` leaves the part
+in the arm. Check the result when it matters. If the arm may already hold a part
+(for example, when continuing earlier work), deal with `holding()` first.
 
 ## Talking to the person
 

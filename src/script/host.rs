@@ -900,12 +900,8 @@ impl ScriptHost {
             "pick",
             |mut c: Caller<'_, State>, args: i32, _kw: i32, line: i32| {
                 let st = c.data_mut();
-                let part = st
-                    .get(args)?
-                    .as_array()
-                    .and_then(|a| a.first())
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let a = st.get(args)?.as_array().cloned().unwrap_or_default();
+                let part = a.first().cloned().unwrap_or(Value::Null);
                 if !is_part(&part) {
                     return Err(st.fail(
                         line,
@@ -915,7 +911,12 @@ impl ScriptHost {
                         ),
                     ));
                 }
-                let args = json!({"object_id": part["id"]});
+                let mut args = json!({"object_id": part["id"]});
+                // From move(): where the part is going (the executor refuses the pick
+                // if that place cannot take it). pick() itself takes one argument.
+                if let Some(to) = a.get(1).filter(|v| !v.is_null()) {
+                    args["to"] = json!(place_id(st, to, "the destination", line)?);
+                }
                 match st.ext("workspace.pick", args, line)? {
                     Err(stop) => Ok(stop),
                     Ok(row) => {

@@ -587,6 +587,8 @@ impl Fn_<'_, '_> {
                     self.emit(I::Call(rt("builtin")));
                 } else if name == "move" {
                     // move(part, to) = pick(part), then place(part, to) if the pick worked.
+                    // The pick also carries `to`, so a destination that cannot take the
+                    // part is refused before the arm picks anything up.
                     let (part, to, r) = (self.new_local(), self.new_local(), self.new_local());
                     self.expr(&args[0]);
                     self.emit(I::LocalSet(part));
@@ -598,7 +600,7 @@ impl Fn_<'_, '_> {
                         None => self.emit(I::I32Const(NONE)),
                     }
                     self.emit(I::LocalSet(to));
-                    self.one_arg_list(part);
+                    self.two_arg_list(part, to);
                     self.emit(I::Call(rt("kw_new")));
                     self.emit(I::I32Const(line));
                     self.emit(I::Call(self.ext("cap.pick")));
@@ -633,14 +635,6 @@ impl Fn_<'_, '_> {
         }
     }
 
-    fn one_arg_list(&mut self, a: u32) {
-        let l = self.new_local();
-        self.emit(I::Call(rt("list_new")));
-        self.emit(I::LocalTee(l));
-        self.emit(I::LocalGet(a));
-        self.emit(I::Call(rt("list_push")));
-        self.emit(I::LocalGet(l));
-    }
     fn two_arg_list(&mut self, a: u32, b: u32) {
         let l = self.new_local();
         self.emit(I::Call(rt("list_new")));

@@ -269,19 +269,25 @@ impl Executor {
                             );
                         }
                     };
-                    match obs.object(&id) {
-                        Some(o)
-                            if o.location_id != GRIPPER && o.location_id != crate::sim::OUTSIDE =>
-                        {
-                            json!({"object_id": id, "source_id": o.location_id})
+                    let refusal = match obs.object(&id) {
+                        Some(o) if o.location_id == GRIPPER => {
+                            Err(format!("{id} is already in the arm"))
                         }
-                        other => {
-                            let why = match other {
-                                Some(o) if o.location_id == GRIPPER => {
-                                    format!("{id} is already in the arm")
-                                }
-                                _ => format!("{id} is not on the table any more"),
-                            };
+                        Some(o) if o.location_id != crate::sim::OUTSIDE => {
+                            // A move names where the part goes: check that before picking.
+                            match row.arguments["to"]
+                                .as_str()
+                                .and_then(|to| cannot_take(&obs, to, &o.observed_kind))
+                            {
+                                Some(why) => Err(format!("{why}; nothing was picked up")),
+                                None => Ok(json!({"object_id": id, "source_id": o.location_id})),
+                            }
+                        }
+                        _ => Err(format!("{id} is not on the table any more")),
+                    };
+                    match refusal {
+                        Ok(args) => args,
+                        Err(why) => {
                             self.store.set_action_status(
                                 row.action_id,
                                 A_FAILED,
@@ -390,7 +396,8 @@ impl Executor {
         }
     }
 
-    /// Report for a program run: what it checked and what it did.
+    /// Report for a program run: what it checked and what it did (and what the
+    /// arm refused to do, with the reason).
     pub(super) fn script_report(&mut self, status: &str, reason: &str) -> Result<Value> {
         let plans = self.store.plans()?;
         let prog = plans
@@ -430,6 +437,14 @@ impl Executor {
             "moves": count("workspace.place", A_SUCCEEDED),
             "picks": count("workspace.pick", A_SUCCEEDED),
             "refused_moves": count("workspace.pick", A_FAILED) + count("workspace.place", A_FAILED),
+            "refusals": actions
+                .iter()
+                .filter(|a| {
+                    (a.capability == "workspace.pick" || a.capability == "workspace.place")
+                        && a.status == A_FAILED
+                })
+                .map(|a| json!({"line": line(a), "part": a.arguments["object_id"], "to": a.arguments.get("to").or(a.arguments.get("destination_id")), "why": a.error}))
+                .collect::<Vec<_>>(),
             "looks": count("workspace.observe", A_SUCCEEDED),
             "messages": actions.iter().filter(|a| a.capability == "human.say").map(|a| a.arguments["message"].clone()).collect::<Vec<_>>(),
             "claims_source": "observation",
@@ -536,4 +551,33 @@ impl Executor {
         )?;
         Ok(R_STOPPED.into())
     }
+}
+
+/// Why a place cannot take a part of this (observed) kind, as far as a look can
+/// tell; `None` if it can. Only ordinary refusals (a bin of another kind, a
+/// place that is unavailable): anything else, such as a destination the policy
+/// forbids, is left to the place step, where the policy stops the run. The
+/// simulator checks again when the part is placed.
+fn cannot_take(obs: &crate::model::Observation, to: &str, kind: &str) -> Option<String> {
+    use crate::model::LocationType as T;
+    let l = obs.location(to)?;
+    if !matches!(l.loc_type, T::Bin | T::Tray | T::Table) {
+        return None;
+    }
+    if !l.available {
+        return Some(format!("{to} is unavailable"));
+    }
+    match (&l.loc_type, &l.accepts_kind) {
+        (T::Bin, Some(acc)) if kind == "unknown" => Some(format!(
+            "{to} only accepts {}, and this part could not be identified",
+            plural(acc)
+        )),
+        (T::Bin, Some(acc)) if acc != kind => Some(format!("{to} only accepts {}", plural(acc))),
+        _ => None,
+    }
+}
+
+/// "green_block" -> "green blocks", for people.
+fn plural(kind: &str) -> String {
+    format!("{}s", kind.replace('_', " "))
 }

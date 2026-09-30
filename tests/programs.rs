@@ -267,6 +267,45 @@ fn a_destination_computed_at_run_time_is_still_held_to_the_policy() {
 }
 
 #[test]
+fn a_move_the_destination_cannot_take_does_nothing_and_says_why() {
+    let state = temp_state("prog-refused");
+    let src = "# Put a red block in the green bin
+reds = parts(kind=\"red_block\")
+ok = move(reds[0], \"bin-green\")
+say(\"refused\" if not ok else \"moved\")
+expect count(\"table\", kind=\"red_block\") == 3, \"the red blocks are still on the table\"
+expect holding() == None, \"the arm holds nothing\"
+";
+    let (run, dir) = start(&state, "messy-table", src);
+    supervise(&state, &run);
+    let rep = report(&dir);
+    assert_eq!(rep["all_expectations_held"], true, "{rep}");
+    assert_eq!(
+        where_is(&dir)["red-01"],
+        "table",
+        "the part stayed where it was"
+    );
+    let picked = SimWorld::open(&dir.join("world.db"))
+        .unwrap()
+        .truth()
+        .unwrap()
+        .receipts
+        .into_iter()
+        .filter(|r| r.outcome == "applied")
+        .count();
+    assert_eq!(picked, 0, "the arm did nothing");
+    assert_eq!(rep["refused_moves"], 1);
+    let why = rep["refusals"][0]["why"].as_str().unwrap();
+    assert!(
+        why.contains("bin-green only accepts green blocks")
+            && why.contains("nothing was picked up"),
+        "{why}"
+    );
+    assert_eq!(rep["refusals"][0]["line"], 3);
+    assert_eq!(rep["messages"], json!(["refused"]), "move() returned False");
+}
+
+#[test]
 fn a_session_keeps_the_table_between_requests() {
     let state = temp_state("prog-session");
     let first = "for p in parts(kind=\"red_block\", at=\"table\"):\n    move(p, \"tray-1\")\nexpect count(\"tray-1\", kind=\"red_block\") == 3, \"the red blocks are in tray 1\"\n";

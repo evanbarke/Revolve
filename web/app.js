@@ -884,6 +884,15 @@ function hud(status, detail, code, actions) {
   [...a.children].forEach((b, i) => { b._fn = actions[i][1]; });
 }
 
+// A message that stays until the person has seen it (why nothing moved): until
+// OK, a new request, or the run needs them.
+let hudNotice = null;
+
+function showNotice(title, detail, code) {
+  hudNotice = { title };
+  hud(title, detail, code, [["OK", () => { hudNotice = null; if (view && view.program) renderHud(view); else hudIdle(); }]]);
+}
+
 function hudIdle() {
   hud("Tell the robot what to do.", "Type a request above and press Do it. The AI writes a program, it is compiled to machine code and the arm runs it here.");
 }
@@ -900,11 +909,22 @@ function renderHud(v) {
   const crashed = !active && v.executor.last_exit_code === v.executor.simulated_crash_code;
   const start = () => act("start", {}, true);
   const finished = v.events.find((e) => e.kind === "program_finished"); // events are newest first
+  if (hudNotice) {
+    if (!(st === "awaiting_human" || st === "blocked" || crashed)) return;
+    hudNotice = null;
+  }
   const checks = (rep) => ((rep && rep.expectations) || []).map((e) => (e.held ? "✓ " : "✗ ") + e.description).join("\n");
+  // What the arm would not do (with the reason) and what the program said.
+  const extra = (rep) => [
+    ...((rep && rep.refusals) || []).map((x) => "✗ Not done: " + (x.why || "refused")),
+    ...((rep && rep.messages) || []).slice(-3).map((m) => "💬 " + m),
+  ].join("\n");
+  const summary = (rep) => [checks(rep), extra(rep)].filter(Boolean).join("\n\n");
   if ((st === "running" || st === "paused") && crashed) {
     hud("The power went out (simulated)", "The arm stopped where it was. Continue: it first checks what the last move did, then carries on. Nothing is done twice.", "", [["Continue", start, "big"]]);
   } else if (st === "running" && active) {
-    hud(last ? "Line " + last.line + " · " + describeCall(last) : "Starting the program", "", codeLine, [["Pause", () => act("pause", {}, true)]]);
+    const refused = last && last.status === "failed";
+    hud(last ? "Line " + last.line + " · " + (refused ? "Not done: " : "") + describeCall(last) : "Starting the program", refused ? last.error || "" : "", codeLine, [["Pause", () => act("pause", {}, true)]]);
   } else if (st === "running" || st === "created") {
     hud("Ready", "", "", [["Continue", start, "big"]]);
   } else if (st === "paused") {
@@ -927,14 +947,14 @@ function renderHud(v) {
     const exps = rep.expectations || [];
     const held = exps.filter((e) => e.held).length;
     hud(held === exps.length ? "Done ✓ " + held + " of " + exps.length + " checks passed" : "Done, but " + (exps.length - held) + " of " + exps.length + " checks did not pass",
-      checks(rep) + "\n\nChecked by looking at the table. Tell it what to do next.");
+      summary(rep) + "\n\nChecked by looking at the table. Tell it what to do next.");
   } else if (st === "awaiting_planner") {
     hud("Waiting for a request", v.state.status_reason || "");
   } else if (st === "blocked") {
     hud("Stopped to check", v.state.status_reason || "", codeLine, [["Continue", start, "big"]]);
   } else if (TERMINAL.includes(st)) {
     const rep = v.state.final_report || {};
-    hud(st === "completed" ? "Done ✓" : st === "partial" ? "Done, but not every check passed" : st === "stopped" ? "Stopped" : "Could not finish", checks(rep) || v.state.status_reason || "");
+    hud(st === "completed" ? "Done ✓" : st === "partial" ? "Done, but not every check passed" : st === "stopped" ? "Stopped" : "Could not finish", summary(rep) || v.state.status_reason || "");
   }
 }
 
@@ -955,6 +975,7 @@ function sessionRun() {
 // Do it: the AI writes the program, it is checked and compiled, and it runs at once.
 async function directRun(text, example) {
   if (writingNow) return;
+  hudNotice = null;
   setWriting(true);
   if (cell3d) window.RevolveCell.stopPreview();
   const session = sessionRun();
@@ -969,9 +990,11 @@ async function directRun(text, example) {
       r = await followJob(body, (st) => hudWriting(st, t0));
     }
     if (!r.accepted) {
-      const why = r.understood === false && r.not_possible ? r.not_possible
+      const declined = r.understood === false;
+      const why = declined ? r.not_possible || "The AI could not see how to do that here."
         : (r.diagnostics || []).map((d) => "line " + d.line + ": " + d.message).join("\n") || "The program did not pass the checker.";
-      hud("Couldn't do that", why + (r.paused_run ? "\n\nThe previous program continues." : ""), r.source || "");
+      showNotice(declined ? "The robot won't do that · nothing moved" : "The program did not pass the checker · nothing moved",
+        why + (r.paused_run ? "\n\nThe previous program carries on." : ""), declined ? "" : r.source || "");
       if (r.paused_run) await act("start", {}, true);
       return;
     }
@@ -988,7 +1011,7 @@ async function directRun(text, example) {
     }
     $("ask").value = "";
   } catch (e) {
-    if (e.message !== "replaced by a newer request") hud("Couldn't do that", e.message);
+    if (e.message !== "replaced by a newer request") showNotice("Couldn't do that · nothing moved", e.message);
   } finally {
     setWriting(false);
   }
@@ -1516,6 +1539,7 @@ function changeWords() {
 }
 
 function newRequest() {
+  hudNotice = null;
   $("cell-hud").textContent = "";
   hudIdle();
   current = null;
@@ -1552,7 +1576,7 @@ function render(v) {
   }
   drawWorkspace(v, trayKit);
   if (isProgram) renderHud(v);
-  else if (!writingNow) hud($("now-title").textContent, $("now-detail").textContent);
+  else if (!writingNow && !hudNotice) hud($("now-title").textContent, $("now-detail").textContent);
   if (isProgram) renderStoryLines(programStory(v));
   else renderStory(v, trayKit);
   if (!$("tech").hidden) renderTech(v);
