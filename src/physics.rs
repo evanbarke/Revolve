@@ -183,7 +183,7 @@ impl CellWorld {
         );
         for p in places.iter().filter(|p| p.kind != "table") {
             let name = place_name(p);
-            let (s, co) = p.yaw.sin_cos();
+            let (s, co) = cell::m::sin_cos(p.yaw);
             let at = |u: f64, v: f64, z: f64| {
                 yaw_pose(p.cx + u * co - v * s, p.cy + u * s + v * co, z, p.yaw)
             };
@@ -507,7 +507,10 @@ fn grow(shape: &SharedShape, m: f64) -> SharedShape {
 
 /// Moved by more than resting jitter.
 fn visibly_moved(a: &PartPose, b: &PartPose) -> bool {
-    let d = ((0..3).map(|i| (a.p[i] - b.p[i]).powi(2)).sum::<f64>()).sqrt();
+    let d = ((0..3)
+        .map(|i| (a.p[i] - b.p[i]) * (a.p[i] - b.p[i]))
+        .sum::<f64>())
+    .sqrt();
     let qa = DQuat::from_xyzw(a.q[0], a.q[1], a.q[2], a.q[3]).normalize();
     let qb = DQuat::from_xyzw(b.q[0], b.q[1], b.q[2], b.q[3]).normalize();
     d > MOVED_M || qa.angle_between(qb) > MOVED_RAD
@@ -543,7 +546,7 @@ pub fn place_name(p: &Place) -> String {
 /// else outside the workspace.
 pub fn locate(places: &[Place], has_table: bool, p: [f64; 3]) -> String {
     for pl in places.iter().filter(|pl| pl.kind != "table") {
-        let (s, c) = pl.yaw.sin_cos();
+        let (s, c) = cell::m::sin_cos(pl.yaw);
         let (dx, dy) = (p[0] - pl.cx, p[1] - pl.cy);
         let (u, v) = (dx * c + dy * s, -dx * s + dy * c);
         if u.abs() <= pl.w / 2.0 && v.abs() <= pl.d / 2.0 && p[2] < pl.floor + pl.wall + 0.12 {

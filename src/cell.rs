@@ -15,6 +15,31 @@
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 
+/// Portable math: the same bits on every machine (Windows x86_64, the Jetson's
+/// aarch64 Linux). The platform's own sin/cos can differ in the last bit, and
+/// the physics would turn that into different results.
+pub mod m {
+    pub fn sin(x: f64) -> f64 {
+        libm::sin(x)
+    }
+    pub fn cos(x: f64) -> f64 {
+        libm::cos(x)
+    }
+    pub fn sin_cos(x: f64) -> (f64, f64) {
+        (libm::sin(x), libm::cos(x))
+    }
+    pub fn atan2(y: f64, x: f64) -> f64 {
+        libm::atan2(y, x)
+    }
+    pub fn acos(x: f64) -> f64 {
+        libm::acos(x)
+    }
+    pub fn hypot(x: f64, y: f64) -> f64 {
+        libm::hypot(x, y)
+    }
+}
+use m::{acos, atan2, cos, hypot, sin, sin_cos};
+
 pub const SHOULDER_H: f64 = 0.30;
 pub const L1: f64 = 0.30;
 pub const L2: f64 = 0.28;
@@ -58,11 +83,11 @@ pub struct P3 {
 /// Fingertip position for joint angles.
 pub fn fk(q: &[f64; 4]) -> P3 {
     let (a1, a2, a3) = (q[1], q[1] + q[2], q[1] + q[2] + q[3]);
-    let r = L1 * a1.cos() + L2 * a2.cos() + L3 * a3.cos();
-    let z = SHOULDER_H + L1 * a1.sin() + L2 * a2.sin() + L3 * a3.sin();
+    let r = L1 * cos(a1) + L2 * cos(a2) + L3 * cos(a3);
+    let z = SHOULDER_H + L1 * sin(a1) + L2 * sin(a2) + L3 * sin(a3);
     P3 {
-        x: r * q[0].cos(),
-        y: r * q[0].sin(),
+        x: r * cos(q[0]),
+        y: r * sin(q[0]),
         z,
     }
 }
@@ -71,12 +96,12 @@ pub fn fk(q: &[f64; 4]) -> P3 {
 /// run between them; the physics checks them for collisions).
 pub fn joints(q: &[f64; 4]) -> [P3; 4] {
     let (a1, a2, a3) = (q[1], q[1] + q[2], q[1] + q[2] + q[3]);
-    let (re, ze) = (L1 * a1.cos(), SHOULDER_H + L1 * a1.sin());
-    let (rw, zw) = (re + L2 * a2.cos(), ze + L2 * a2.sin());
-    let (rt, zt) = (rw + L3 * a3.cos(), zw + L3 * a3.sin());
+    let (re, ze) = (L1 * cos(a1), SHOULDER_H + L1 * sin(a1));
+    let (rw, zw) = (re + L2 * cos(a2), ze + L2 * sin(a2));
+    let (rt, zt) = (rw + L3 * cos(a3), zw + L3 * sin(a3));
     let at = |r: f64, z: f64| P3 {
-        x: r * q[0].cos(),
-        y: r * q[0].sin(),
+        x: r * cos(q[0]),
+        y: r * sin(q[0]),
         z,
     };
     [at(0.0, SHOULDER_H), at(re, ze), at(rw, zw), at(rt, zt)]
@@ -85,19 +110,19 @@ pub fn joints(q: &[f64; 4]) -> [P3; 4] {
 /// Joint angles that put the fingertips at (x, y, z) with the tool pointing
 /// straight down (elbow up), if reachable within the joint limits.
 pub fn ik(x: f64, y: f64, z: f64) -> Option<[f64; 4]> {
-    let r = x.hypot(y);
+    let r = hypot(x, y);
     if r < MIN_R * 0.9 {
         return None;
     }
-    let q0 = y.atan2(x);
+    let q0 = atan2(y, x);
     let (dr, dz) = (r, z + L3 - SHOULDER_H);
     let d2 = dr * dr + dz * dz;
     let c2 = (d2 - L1 * L1 - L2 * L2) / (2.0 * L1 * L2);
     if !(-1.0..=1.0).contains(&c2) {
         return None;
     }
-    let q2 = -c2.acos();
-    let q1 = dz.atan2(dr) + (L2 * (-q2).sin()).atan2(L1 + L2 * q2.cos());
+    let q2 = -acos(c2);
+    let q1 = atan2(dz, dr) + atan2(L2 * sin(-q2), L1 + L2 * cos(q2));
     let q3 = -PI / 2.0 - (q1 + q2);
     let q = [q0, q1, q2, q3];
     within_limits(&q).then_some(q)
@@ -173,7 +198,7 @@ fn path_clearance(a: &[f64; 4], b: &[f64; 4]) -> (f64, f64) {
         let q: [f64; 4] = std::array::from_fn(|j| a[j] + (b[j] - a[j]) * t);
         let p = fk(&q);
         lowest = lowest.min(p.z);
-        closest = closest.min(p.x.hypot(p.y));
+        closest = closest.min(hypot(p.x, p.y));
     }
     (lowest, closest)
 }
@@ -341,8 +366,8 @@ fn polar(id: &str, kind: &str, r: f64, deg: f64, w: f64, d: f64, wall: f64) -> P
     Place {
         id: id.into(),
         kind: kind.into(),
-        cx: r * a.cos(),
-        cy: r * a.sin(),
+        cx: r * cos(a),
+        cy: r * sin(a),
         yaw: a - PI / 2.0,
         w,
         d,
@@ -427,10 +452,10 @@ pub fn slot_position(p: &Place, i: usize, h: f64) -> P3 {
             // A loose, deterministic pile (sunflower pattern).
             let r = 0.085 * ((k as f64 + 0.5) / per as f64).sqrt();
             let a = k as f64 * 2.399_963;
-            (r * a.cos(), r * a.sin())
+            (r * cos(a), r * sin(a))
         }
     };
-    let (s, c) = p.yaw.sin_cos();
+    let (s, c) = sin_cos(p.yaw);
     P3 {
         x: p.cx + u * c - v * s,
         y: p.cy + u * s + v * c,
@@ -482,7 +507,7 @@ mod tests {
     /// Exact overlap test for two rotated rectangles (separating axes), each grown by `m`.
     fn boxes_overlap(a: &Place, b: &Place, m: f64) -> bool {
         let corners = |p: &Place| -> Vec<(f64, f64)> {
-            let (s, c) = p.yaw.sin_cos();
+            let (s, c) = sin_cos(p.yaw);
             let (hw, hd) = if p.kind == "table" {
                 (p.w + m, p.d + m)
             } else {
@@ -496,7 +521,7 @@ mod tests {
         let (ca, cb) = (corners(a), corners(b));
         let axes = [a.yaw, a.yaw + PI / 2.0, b.yaw, b.yaw + PI / 2.0];
         axes.iter().all(|t| {
-            let (ax, ay) = (t.cos(), t.sin());
+            let (ax, ay) = (cos(t), sin(t));
             let proj = |pts: &Vec<(f64, f64)>| {
                 pts.iter()
                     .map(|(x, y)| x * ax + y * ay)
@@ -509,14 +534,14 @@ mod tests {
 
     /// The pile is a disc of radius `w`: is it within `gap` of a box?
     fn disc_near_box(disc: &Place, b: &Place, gap: f64) -> bool {
-        let (s, c) = b.yaw.sin_cos();
+        let (s, c) = sin_cos(b.yaw);
         let (dx, dy) = (disc.cx - b.cx, disc.cy - b.cy);
         let (u, v) = (dx * c + dy * s, -dx * s + dy * c);
         let (ou, ov) = (
             (u.abs() - b.w / 2.0).max(0.0),
             (v.abs() - b.d / 2.0).max(0.0),
         );
-        ou.hypot(ov) < disc.w + gap
+        hypot(ou, ov) < disc.w + gap
     }
 
     fn overlap(a: &Place, b: &Place, m: f64) -> bool {

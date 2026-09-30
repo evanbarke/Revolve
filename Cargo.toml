@@ -27,6 +27,8 @@ wasmtime = { version = "47.0.4", default-features = false, features = ["cranelif
 # deterministic across x86_64 and aarch64 (enhanced-determinism), so a command
 # gives the same result on Windows and the Jetson, and on replay.
 rapier3d-f64 = { version = "0.36.0", default-features = false, features = ["dim3", "f64", "std", "enhanced-determinism"] }
+# Portable sin/cos/atan2 for the cell's geometry, for the same reason.
+libm = "0.2.16"
 
 [dev-dependencies]
 wat = "1"

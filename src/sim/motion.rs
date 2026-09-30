@@ -296,7 +296,7 @@ fn simulate_release(
         kind: kind.into(),
         p: [at.x, at.y, at.z],
         // Turned with the arm's base, as the gripper holds it.
-        q: physics::turned(at.y.atan2(at.x)),
+        q: physics::turned(cell::m::atan2(at.y, at.x)),
     }))
 }
 

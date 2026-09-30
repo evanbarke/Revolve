@@ -1215,6 +1215,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "getrandom",
+ "libm",
  "rapier3d-f64",
  "rusqlite",
  "serde",
