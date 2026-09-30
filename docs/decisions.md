@@ -145,6 +145,35 @@ the same response shape) through a background job the page polls. This was
 chosen because tiny_http buffers chunked responses, which would defeat
 server-sent events.
 
+**D19 — Rigid-body physics (Rapier) with collision-checked arm paths.** The
+owner asked for a real physics engine that handles physical barriers and
+gravity. Rapier (pure Rust, f64) was chosen over MuJoCo. MuJoCo is the
+robotics standard and is the likely choice once a real arm is involved, but
+Rapier builds on Windows and the Jetson without a C toolchain, and its
+`enhanced-determinism` mode is bit-for-bit identical across x86_64 and aarch64,
+which recovery, replay and the Windows/Jetson equivalence checks rely on.
+- **Parts** are bodies with mass and friction under gravity. A place lowers the
+  part to just above whatever is below the target spot and lets go; the fall is
+  simulated before the effect transaction, and where the part (and anything it
+  knocked) came to rest is committed inside it, with the receipt. Where a part
+  lies decides which place it is in.
+- **Solid things:** bins, trays, the table, the robot's column and scenario
+  barriers are colliders. Every arm path (links as capsules, plus the carried
+  part) is checked along its length. The usual route is tried first, then routes
+  over at increasing heights; if all are blocked, nothing moves and the reason
+  names what is in the way. A covered part cannot be picked. A program's `move`
+  asks the simulator whether it can put the part down before picking it up.
+- **Deliberately simple:** the arm follows its path exactly and never pushes
+  things (like a protective stop); a grasp is an attachment, not finger
+  friction; vertical moves are straight lines, other moves are joint moves.
+- **Stability:** the world is rebuilt from world.db for each command. Changes
+  below 0.5 mm or 0.01 rad count as resting jitter and are not stored, so
+  resting parts do not drift. Parts start square to their bin or tray, turned a
+  little in the pile, and numbered so that taking them in order never digs
+  under another part.
+
+With these, both benchmark suites give the same verdicts as before physics.
+
 **D13 — Restricted grammar, not NLU, in scripted mode.** `parse-request` and
 the UI accept only the kit family's phrasing and refuse anything else rather
 than guessing.

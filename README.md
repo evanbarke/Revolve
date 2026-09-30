@@ -22,9 +22,12 @@ trays). It works offline, needs no GPU, no robot, no model download and no API
 key. A benchmark compares it with a direct tool-calling baseline on the same
 capabilities.
 
-> Scope: a deterministic discrete simulator establishes execution semantics.
-> It says nothing about physical feasibility, perception, collision avoidance or
-> robot safety. Pause/cancel are logical controls, not an emergency stop.
+> Scope: a deterministic simulator establishes execution semantics. It
+> simulates rigid-body physics (gravity, contact, solid walls and barriers,
+> collision-checked arm paths; Rapier), but grasping is modelled as an
+> attachment and there is no perception, so it says nothing about a real
+> robot's sensing, grip or safety. Pause/cancel are logical controls, not an
+> emergency stop.
 
 ## Quick start
 

@@ -13,6 +13,7 @@ effect of a capability"), so both benchmark arms face identical conditions
 regardless of how many planner calls they make.
 """
 import json
+import math
 import os
 import random
 
@@ -64,6 +65,28 @@ def sc(sid, family, desc, world, g, expect_outcome, expect_kits, faults=None, hu
 
 
 STD = {"red_block": 1, "blue_block": 1, "washer": 2}
+
+
+def wall_between():
+    """A wall 22 cm high along the line from the base at 67 degrees, from 30 to
+    56 cm out: between the pile (90 degrees) and trays 1-3 (12-56 degrees)."""
+    a, r0, r1 = math.radians(67.0), 0.30, 0.56
+    rc = (r0 + r1) / 2
+    return {"id": "wall", "label": "the wall between the pile and trays 1 to 3", "x": round(1000 * rc * math.cos(a)), "y": round(1000 * rc * math.sin(a)),
+            "w": 20, "d": round(1000 * (r1 - r0)), "h": 220, "yaw": 67 - 90}
+
+
+def cage_around(tray, deg):
+    """Four walls 30 cm high, 1 cm outside a tray (13 x 12 cm) at radius 46 cm."""
+    a = math.radians(deg)
+    cx, cy, yaw = 0.46 * math.cos(a), 0.46 * math.sin(a), a - math.pi / 2
+    out = []
+    for i, (u, v, w, d) in enumerate([(0.0, 0.07, 0.158, 0.008), (0.0, -0.07, 0.158, 0.008), (0.075, 0.0, 0.008, 0.132), (-0.075, 0.0, 0.008, 0.132)]):
+        x = cx + u * math.cos(yaw) - v * math.sin(yaw)
+        y = cy + u * math.sin(yaw) + v * math.cos(yaw)
+        out.append({"id": f"cage-{i + 1}", "label": f"the cage around {tray.replace('-', ' ')}", "x": round(1000 * x), "y": round(1000 * y),
+                    "w": round(1000 * w), "d": round(1000 * d), "h": 300, "yaw": round(math.degrees(yaw))})
+    return out
 
 
 def family_builders():
@@ -283,8 +306,10 @@ def main():
     messy = {"red_block": 3, "blue_block": 2, "green_block": 2, "washer": 3}
     scrap = [{"bin": "table", "true_kind": "scrap"}]
 
-    def play(sid, desc, stock, table, unknown=None, trays=4, faults=None):
+    def play(sid, desc, stock, table, unknown=None, trays=4, faults=None, barriers=None):
         world = {"stock": stock, "table": table, "unknown_items": unknown or [], "trays": trays}
+        if barriers:
+            world["barriers"] = barriers
         return sc(sid, "playground", desc, world, play_goal, "completed", 0, faults=faults,
                   note="playground: judged by the program's own expectations, checked by observation")
 
@@ -297,6 +322,10 @@ def main():
              empty, messy, scrap, faults=[{"kind": "crash_after_effect", "on": trig("workspace.place", 4)}]),
         play("messy-table-thief", "The messy table; someone takes a red block off the table after the 2nd part is placed.",
              empty, messy, scrap, faults=[{"kind": "remove_object", "on": trig("workspace.place", 2), "object_id": "red-03"}]),
+        play("wall-table", "The messy table with a tall wall between the pile and trays 1-3: the arm has to lift parts over it.",
+             empty, messy, scrap, barriers=[wall_between()]),
+        play("caged-tray", "The messy table; tray 2 is inside a tall safety cage the arm cannot reach into.",
+             empty, messy, scrap, barriers=cage_around("tray-2", 34.0)),
     ]
 
     for sub, items in out.items():

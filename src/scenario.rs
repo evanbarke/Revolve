@@ -98,6 +98,28 @@ pub struct WorldSetup {
     pub unknown_items: Vec<UnknownItem>,
     #[serde(default = "default_trays")]
     pub trays: u32,
+    /// Solid barriers standing on the table.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub barriers: Vec<Barrier>,
+}
+
+/// A solid barrier on the table (a wall, a cage), in millimetres and degrees.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Barrier {
+    pub id: String,
+    /// What people call it, e.g. "the wall".
+    pub label: String,
+    /// Centre on the table.
+    pub x: i32,
+    pub y: i32,
+    /// Size across, deep and high.
+    pub w: i32,
+    pub d: i32,
+    pub h: i32,
+    /// Turned about the vertical.
+    #[serde(default)]
+    pub yaw: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

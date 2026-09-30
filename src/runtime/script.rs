@@ -274,11 +274,12 @@ impl Executor {
                             Err(format!("{id} is already in the arm"))
                         }
                         Some(o) if o.location_id != crate::sim::OUTSIDE => {
-                            // A move names where the part goes: check that before picking.
-                            match row.arguments["to"]
-                                .as_str()
-                                .and_then(|to| cannot_take(&obs, to, &o.observed_kind))
-                            {
+                            // A move names where the part goes: check that before picking,
+                            // first by looking, then with the arm's own path planning.
+                            match row.arguments["to"].as_str().and_then(|to| {
+                                cannot_take(&obs, to, &o.observed_kind)
+                                    .or_else(|| self.world.can_put(&id, to))
+                            }) {
                                 Some(why) => Err(format!("{why}; nothing was picked up")),
                                 None => Ok(json!({"object_id": id, "source_id": o.location_id})),
                             }

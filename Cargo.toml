@@ -23,9 +23,27 @@ getrandom = "0.2.17"
 # wasmtime 47 is the newest release whose MSRV (1.94) matches this crate's.
 wasm-encoder = "0.259.0"
 wasmtime = { version = "47.0.4", default-features = false, features = ["cranelift", "runtime", "std"] }
+# Rigid-body physics for the robot cell: gravity, contacts, solid walls. Bit-for-bit
+# deterministic across x86_64 and aarch64 (enhanced-determinism), so a command
+# gives the same result on Windows and the Jetson, and on replay.
+rapier3d-f64 = { version = "0.36.0", default-features = false, features = ["dim3", "f64", "std", "enhanced-determinism"] }
 
 [dev-dependencies]
 wat = "1"
+
+# The physics engine is slow unoptimised; tests simulate many falls.
+[profile.dev.package.rapier3d-f64]
+opt-level = 3
+[profile.dev.package.parry3d-f64]
+opt-level = 3
+[profile.dev.package.glam]
+opt-level = 3
+[profile.dev.package.glamx]
+opt-level = 3
+[profile.dev.package.simba]
+opt-level = 3
+[profile.dev.package.nalgebra]
+opt-level = 3
 
 [profile.release]
 # Smaller, faster binary for the Jetson; no debug info in release artifacts.

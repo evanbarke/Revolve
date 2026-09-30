@@ -128,7 +128,12 @@ CREATE TABLE IF NOT EXISTS objects (
   x REAL,
   y REAL,
   z REAL,
-  slot INTEGER
+  slot INTEGER,
+  -- How the part is turned (a quaternion); NULL = not turned.
+  qx REAL,
+  qy REAL,
+  qz REAL,
+  qw REAL
 );
 -- The gripper holds at most one object (single location per object is structural).
 CREATE UNIQUE INDEX IF NOT EXISTS gripper_single ON objects(location_id) WHERE location_id = 'gripper';
@@ -293,7 +298,14 @@ impl SimWorld {
                 params![c],
             )?;
         }
+        for b in &sc.world.barriers {
+            tx.execute(
+                "INSERT INTO barriers(barrier_id, label, x, y, w, d, h, yaw) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![b.id, b.label, b.x as f64 / 1000.0, b.y as f64 / 1000.0, b.w as f64 / 1000.0, b.d as f64 / 1000.0, b.h as f64 / 1000.0, (b.yaw as f64).to_radians()],
+            )?;
+        }
         motion::assign_slots(&tx)?;
+        motion::settle_new_table(&tx)?;
         tx.execute(
             "UPDATE world_meta SET arm = ?1 WHERE id = 1",
             params![serde_json::to_string(&crate::cell::home())?],
@@ -620,16 +632,20 @@ impl SimWorld {
             "UPDATE objects SET location_id = ?1 WHERE object_id = ?2",
             params![to, object_id],
         )?;
-        motion::settle_position(&tx, pending.as_ref(), capability, object_id, &to)?;
+        let rests = motion::settle_position(&tx, pending.as_ref(), capability, object_id, &to)?;
         let rev = Self::bump_revision(&tx)?;
         tx.execute(
             "UPDATE effect_counters SET applied = applied + 1 WHERE capability = ?1",
             params![capability],
         )?;
-        let receipt = json!({
+        let mut receipt = json!({
             "op_key": op_key, "capability": capability, "object_id": object_id,
             "from": from, "to": to, "world_revision": rev
         });
+        // The release worked, but the part came to rest somewhere else.
+        if let Some(r) = rests.filter(|r| *r != to) {
+            receipt["rests_at"] = json!(r);
+        }
         tx.execute(
             "INSERT INTO receipts(op_key, capability, fingerprint, outcome, category, detail, world_revision, at_ms)
              VALUES (?1, ?2, ?3, 'applied', NULL, ?4, ?5, ?6)",

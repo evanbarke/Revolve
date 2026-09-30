@@ -71,13 +71,13 @@ fn objects_are_conserved_and_single_located() {
         .enumerate()
     {
         let (o, _) = w.pick(&format!("op-p{i}"), obj, bin);
-        assert!(matches!(o, AdapterOutcome::Applied { .. }));
+        assert!(matches!(o, AdapterOutcome::Applied { .. }), "{o:?}");
         let (o, _) = w.place(&format!("op-q{i}"), obj, "tray-1");
-        assert!(matches!(o, AdapterOutcome::Applied { .. }));
+        assert!(matches!(o, AdapterOutcome::Applied { .. }), "{o:?}");
     }
     // Bin destinations only accept their kind.
     let (o, _) = w.pick("op-p9", "washer-01", "bin-washer");
-    assert!(matches!(o, AdapterOutcome::Applied { .. }));
+    assert!(matches!(o, AdapterOutcome::Applied { .. }), "{o:?}");
     let (o, _) = w.place("op-q9", "washer-01", "bin-red");
     assert!(matches!(o, AdapterOutcome::Rejected { .. }));
     let after = w.truth().unwrap();

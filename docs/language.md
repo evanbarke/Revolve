@@ -16,7 +16,12 @@ always finishes.
 - **Part kinds:** `"red_block"`, `"blue_block"`, `"green_block"`, `"washer"`, and
   `"unknown"` for a part the camera could not identify. An unknown part cannot
   go into a bin.
-- **The arm** holds one part at a time.
+- **The arm** holds one part at a time. Parts are physical objects (simulated
+  with gravity and contact): they are lowered and let go just above where they
+  will rest.
+- **Barriers:** some tables have solid barriers, listed in `table.barriers`. The
+  arm goes over what it can. A place it cannot reach without hitting something
+  cannot be used.
 
 ## Looking at the table
 
@@ -39,8 +44,9 @@ Every move is checked by the safety policy before the arm acts.
 | `pick(part)` / `place(part, to)` | the two halves of `move` |
 
 A move that cannot be done returns False. If the part is gone, the place is
-unavailable, or a bin does not accept that kind, `move` finds out before picking
-anything up, so nothing happens. A `place` refused after a `pick` leaves the part
+unavailable, a bin does not accept that kind, or the arm cannot get there
+without hitting something, `move` finds out before picking anything up, so
+nothing happens. A part with another part on top of it cannot be picked up. A `place` refused after a `pick` leaves the part
 in the arm. Check the result when it matters. If the arm may already hold a part
 (for example, when continuing earlier work), deal with `holding()` first.
 

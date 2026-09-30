@@ -16,6 +16,7 @@ pub mod harness;
 pub mod inventory;
 pub mod ir;
 pub mod model;
+pub mod physics;
 pub mod planner;
 pub mod policy;
 pub mod program;

@@ -67,6 +67,21 @@ pub fn fk(q: &[f64; 4]) -> P3 {
     }
 }
 
+/// Shoulder, elbow, wrist and fingertip positions for joint angles (the links
+/// run between them; the physics checks them for collisions).
+pub fn joints(q: &[f64; 4]) -> [P3; 4] {
+    let (a1, a2, a3) = (q[1], q[1] + q[2], q[1] + q[2] + q[3]);
+    let (re, ze) = (L1 * a1.cos(), SHOULDER_H + L1 * a1.sin());
+    let (rw, zw) = (re + L2 * a2.cos(), ze + L2 * a2.sin());
+    let (rt, zt) = (rw + L3 * a3.cos(), zw + L3 * a3.sin());
+    let at = |r: f64, z: f64| P3 {
+        x: r * q[0].cos(),
+        y: r * q[0].sin(),
+        z,
+    };
+    [at(0.0, SHOULDER_H), at(re, ze), at(rw, zw), at(rt, zt)]
+}
+
 /// Joint angles that put the fingertips at (x, y, z) with the tool pointing
 /// straight down (elbow up), if reachable within the joint limits.
 pub fn ik(x: f64, y: f64, z: f64) -> Option<[f64; 4]> {
@@ -101,6 +116,28 @@ pub struct Segment {
     /// Duration at 1x speed.
     pub nominal_ms: i64,
     pub carrying: Option<String>,
+}
+
+/// Vertical moves (up or down) go in a straight line, like a robot's linear
+/// move, so a part lowered into a bin does not swing into its wall; the other
+/// moves are joint moves.
+pub fn is_straight(kind: &str) -> bool {
+    matches!(kind, "descend" | "lift" | "rise" | "lower")
+}
+
+/// The joint angles a fraction `u` (0..1) of the way along a segment.
+pub fn along(s: &Segment, u: f64) -> [f64; 4] {
+    let joint = || std::array::from_fn(|j| s.from.q[j] + (s.to.q[j] - s.from.q[j]) * u);
+    if !is_straight(s.kind) || s.from.q == s.to.q {
+        return joint();
+    }
+    let (a, b) = (fk(&s.from.q), fk(&s.to.q));
+    ik(
+        a.x + (b.x - a.x) * u,
+        a.y + (b.y - a.y) * u,
+        a.z + (b.z - a.z) * u,
+    )
+    .unwrap_or_else(joint)
 }
 
 fn joint_ms(a: &[f64; 4], b: &[f64; 4]) -> i64 {
@@ -151,6 +188,47 @@ pub fn plan_to(
     z: f64,
     carrying: Option<&str>,
 ) -> Result<Vec<Segment>, String> {
+    plan_to_clear(from, x, y, z, carrying, &|_| None)
+}
+
+/// Cruise heights for going over something in the way.
+const OVER: [f64; 3] = [HIGH_Z, 0.36, 0.44];
+
+/// As `plan_to`, around solid things: `touches` names what a segment would hit
+/// (the physics checks it). The usual route is tried first, then routes over at
+/// increasing heights. With nothing in the way the result is exactly `plan_to`.
+/// If every route is blocked, nothing moves and the reason names what is in the way.
+pub fn plan_to_clear(
+    from: Arm,
+    x: f64,
+    y: f64,
+    z: f64,
+    carrying: Option<&str>,
+    touches: &dyn Fn(&Segment) -> Option<String>,
+) -> Result<Vec<Segment>, String> {
+    let usual = route(from, x, y, z, carrying, None)?;
+    let Some(hit) = usual.iter().find_map(touches) else {
+        return Ok(usual);
+    };
+    for h in OVER {
+        if let Ok(r) = route(from, x, y, z, carrying, Some(h))
+            && r.iter().find_map(touches).is_none()
+        {
+            return Ok(r);
+        }
+    }
+    Err(format!("no clear path: the arm would hit {hit}"))
+}
+
+/// One route: the usual one (`over` = None), or up and over at height `over`.
+fn route(
+    from: Arm,
+    x: f64,
+    y: f64,
+    z: f64,
+    carrying: Option<&str>,
+    over: Option<f64>,
+) -> Result<Vec<Segment>, String> {
     let mut out = vec![];
     let mut cur = from;
     let here = fk(&cur.q);
@@ -168,8 +246,23 @@ pub fn plan_to(
         out.push(seg("lift", cur, next, carrying));
         cur = next;
     }
-    // Across at the safe height, or by the higher route.
-    if cur.q != above {
+    if let Some(h) = over {
+        let p = fk(&cur.q);
+        let up = ik(p.x, p.y, h).ok_or("cannot rise that high here")?;
+        let over_q = ik(x, y, h).ok_or("cannot reach over at that height")?;
+        let (low, near) = path_clearance(&up, &over_q);
+        if low < CLEAR_Z || near < MIN_R {
+            return Err("no safe path over: the arm would pass too close to its base".into());
+        }
+        for (kind, q) in [("rise", up), ("travel", over_q), ("lower", above)] {
+            if q != cur.q {
+                let next = Arm { q, grip: cur.grip };
+                out.push(seg(kind, cur, next, carrying));
+                cur = next;
+            }
+        }
+    } else if cur.q != above {
+        // Across at the safe height, or by the higher route.
         let (low, near) = path_clearance(&cur.q, &above);
         if low >= CLEAR_Z && near >= MIN_R {
             let next = Arm {
@@ -288,7 +381,7 @@ pub fn place_for(id: &str, loc_type: &str) -> Option<Place> {
             };
             Some(polar(id, "tray", r, deg, TRAY.0, TRAY.1, TRAY.2))
         }
-        "table" => Some(polar(id, "table", 0.25, 90.0, 0.09, 0.09, 0.0)),
+        "table" => Some(polar(id, "table", 0.25, 90.0, 0.10, 0.10, 0.0)),
         _ => None,
     }
 }
@@ -313,6 +406,16 @@ pub fn slots_per_layer(p: &Place) -> usize {
     }
 }
 
+/// How a part in slot `i` is turned about the vertical: square to its bin or
+/// tray (which face the arm), or at a varied angle in the loose pile.
+pub fn slot_yaw(p: &Place, i: usize) -> f64 {
+    match p.kind.as_str() {
+        "bin" | "tray" => p.yaw,
+        // Turned a little either way, so neighbours never overlap.
+        _ => (i as f64 * 0.7) % 0.7 - 0.35,
+    }
+}
+
 /// Centre of slot `i` for a part of height `h` (layers stack upwards).
 pub fn slot_position(p: &Place, i: usize, h: f64) -> P3 {
     let per = slots_per_layer(p);
@@ -322,7 +425,7 @@ pub fn slot_position(p: &Place, i: usize, h: f64) -> P3 {
         "tray" => ((k % 3) as f64 * 0.04 - 0.04, (k / 3) as f64 * 0.05 - 0.025),
         _ => {
             // A loose, deterministic pile (sunflower pattern).
-            let r = 0.072 * ((k as f64 + 0.5) / per as f64).sqrt();
+            let r = 0.085 * ((k as f64 + 0.5) / per as f64).sqrt();
             let a = k as f64 * 2.399_963;
             (r * a.cos(), r * a.sin())
         }
@@ -404,13 +507,33 @@ mod tests {
         })
     }
 
+    /// The pile is a disc of radius `w`: is it within `gap` of a box?
+    fn disc_near_box(disc: &Place, b: &Place, gap: f64) -> bool {
+        let (s, c) = b.yaw.sin_cos();
+        let (dx, dy) = (disc.cx - b.cx, disc.cy - b.cy);
+        let (u, v) = (dx * c + dy * s, -dx * s + dy * c);
+        let (ou, ov) = (
+            (u.abs() - b.w / 2.0).max(0.0),
+            (v.abs() - b.d / 2.0).max(0.0),
+        );
+        ou.hypot(ov) < disc.w + gap
+    }
+
+    fn overlap(a: &Place, b: &Place, m: f64) -> bool {
+        match (a.kind == "table", b.kind == "table") {
+            (true, false) => disc_near_box(a, b, 2.0 * m),
+            (false, true) => disc_near_box(b, a, 2.0 * m),
+            _ => boxes_overlap(a, b, m),
+        }
+    }
+
     #[test]
     fn places_do_not_overlap() {
         let ps = places();
         for (i, a) in ps.iter().enumerate() {
             for b in &ps[i + 1..] {
                 assert!(
-                    !boxes_overlap(a, b, 0.005),
+                    !overlap(a, b, 0.005),
                     "{} and {} are closer than 1 cm",
                     a.id,
                     b.id

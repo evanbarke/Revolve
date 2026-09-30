@@ -42,6 +42,11 @@ Pipe files over ssh stdin; PowerShell pipes add CRLF.
 - Planner output is untrusted: runtime-owned fields are rejected; grants come
   only from `policy.rs`; goals carry no permissions.
 - "Complete" is only ever reported from observation (verifier) or truth (evaluator).
+- Physics (src/physics.rs, Rapier with `enhanced-determinism`): a fall is
+  simulated before the effect transaction and committed inside it with the
+  receipt; the physics world is rebuilt from world.db for every command, so
+  results match bit for bit on Windows and the Jetson. Arm paths are checked,
+  never pushed through: blocked means refused before anything moves.
 - Compiled plan programs never perform effects: the host stops the program at the
   first undone step and the executor dispatches it through the normal path. Every
   program request is validated against the checked plan, and a module may import

@@ -778,6 +778,6 @@ fn markdown_report(meta: &Value, summary: &Value, vs: &[Verdict], incomplete: &[
             ));
         }
     }
-    s.push_str("\n## Interpretation limits\n\n- Scenario counts are small; results are preliminary and do not establish general superiority.\n- The simulator is discrete and deterministic; it says nothing about physical feasibility, perception or safety.\n- `success` requires the terminal state and truly-complete kit count to match the scenario's authored expectation, zero false claims, zero duplicate effects, zero invariant violations and (except for expected-blocked runs) a correct inventory record.\n");
+    s.push_str("\n## Interpretation limits\n\n- Scenario counts are small; results are preliminary and do not establish general superiority.\n- The simulator is deterministic. It simulates rigid-body physics (gravity, contact, solid walls and barriers; the arm is checked for collisions along every path), but grasping is modelled as an attachment and there is no perception: it says nothing about a real robot's sensing, grip or safety.\n- `success` requires the terminal state and truly-complete kit count to match the scenario's authored expectation, zero false claims, zero duplicate effects, zero invariant violations and (except for expected-blocked runs) a correct inventory record.\n");
     s
 }

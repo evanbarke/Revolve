@@ -1,10 +1,12 @@
 // Revolve: a live 3D view of the simulated robot cell.
 //
-// Everything drawn comes from the simulator: place geometry, where each part
-// rests, and the arm's commanded motion segments, each with a wall-clock start
-// and duration. The view poses the arm with the same kinematics as the
-// simulator (src/cell.rs) and interpolates the segments against the server
-// clock, so it shows the motion as it happens. It never invents motion.
+// Everything drawn comes from the simulator: place geometry, barriers, where
+// each part rests and how it is turned, the arm's commanded motion segments
+// (each with a wall-clock start and duration), and the falls the physics
+// simulated when parts were let go. The view poses the arm with the same
+// kinematics as the simulator (src/cell.rs), moves it in a straight line where
+// the simulator does, and plays everything against the server clock, so it
+// shows the motion as it happens. It never invents motion.
 //
 // World frame (simulator): x right, y forward, z up, metres. three.js: y up.
 
@@ -23,6 +25,30 @@ function partHeight(kind) {
 }
 
 function ease(u) { return 0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, Math.max(0, u))); }
+
+// Vertical moves go in a straight line (as in src/cell.rs).
+const STRAIGHT = new Set(["descend", "lift", "rise", "lower"]);
+
+// Fingertip position (simulator frame) for joint angles, as in src/cell.rs.
+function tipOf(c, q) {
+  const a1 = q[1], a2 = a1 + q[2], a3 = a2 + q[3];
+  const r = c.l1 * Math.cos(a1) + c.l2 * Math.cos(a2) + c.l3 * Math.cos(a3);
+  return [r * Math.cos(q[0]), r * Math.sin(q[0]), c.shoulder_h + c.l1 * Math.sin(a1) + c.l2 * Math.sin(a2) + c.l3 * Math.sin(a3)];
+}
+
+// Joint angles for a fingertip position with the tool pointing down, as in src/cell.rs.
+function ikOf(c, x, y, z) {
+  const dr = Math.hypot(x, y), dz = z + c.l3 - c.shoulder_h;
+  const c2 = (dr * dr + dz * dz - c.l1 * c.l1 - c.l2 * c.l2) / (2 * c.l1 * c.l2);
+  if (!(c2 >= -1 && c2 <= 1)) return null;
+  const q2 = -Math.acos(c2);
+  const q1 = Math.atan2(dz, dr) + Math.atan2(c.l2 * Math.sin(-q2), c.l1 + c.l2 * Math.cos(q2));
+  return [Math.atan2(y, x), q1, q2, -Math.PI / 2 - (q1 + q2)];
+}
+
+// A rotation stored in the simulator frame (x, y, z, w) as a three.js quaternion.
+function quat(q) { return new THREE.Quaternion(q[0], q[2], -q[1], q[3]); }
+const UP = new THREE.Vector3(0, 1, 0);
 
 function label(text, color) {
   const c = document.createElement("canvas");
@@ -170,6 +196,10 @@ class Cell {
     this.scene.add(this.placesGroup);
     this.partsGroup = new THREE.Group();
     this.scene.add(this.partsGroup);
+    this.barriersGroup = new THREE.Group();
+    this.scene.add(this.barriersGroup);
+    this.barrierKey = "";
+    this.falls = new Map(); // part id -> falls, oldest first
     this.parts = new Map();
     this.placeMeshes = new Map();
     this.motions = [];
@@ -237,11 +267,62 @@ class Cell {
     }
   }
 
+  // Solid barriers on the table (from the scenario).
+  buildBarriers(bs) {
+    const key = bs.map((b) => b.id).join(",");
+    if (key === this.barrierKey) return;
+    this.barrierKey = key;
+    this.barriersGroup.clear();
+    const mat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.6, transparent: true, opacity: 0.8 });
+    const labelled = new Set();
+    for (const b of bs) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), mat);
+      m.position.copy(V(b.x, b.y, b.h / 2));
+      m.rotation.y = b.yaw;
+      m.castShadow = true;
+      m.receiveShadow = true;
+      this.barriersGroup.add(m);
+      if (!labelled.has(b.label)) {
+        labelled.add(b.label);
+        const tag = label(b.label.replace(/^the /, "").replace(/^./, (ch) => ch.toUpperCase()), "#b45309");
+        tag.position.copy(V(b.x, b.y, b.h + 0.03));
+        this.barriersGroup.add(tag);
+      }
+    }
+  }
+
+  // Where a falling part is at time t, from its recorded fall; null if it is not falling.
+  fallAt(id, t) {
+    const fs = this.falls.get(id);
+    if (!fs) return null;
+    for (let i = fs.length - 1; i >= 0; i--) {
+      const f = fs[i], fr = f.frames;
+      if (!fr || !fr.length || t < f.at_ms) continue;
+      const end = f.at_ms + fr[fr.length - 1][0];
+      if (t > end || end === f.at_ms) return null;
+      const dt = t - f.at_ms;
+      let k = 0;
+      while (k < fr.length - 2 && fr[k + 1][0] <= dt) k++;
+      const a = fr[k], b = fr[Math.min(k + 1, fr.length - 1)];
+      const u = b[0] > a[0] ? Math.min(1, (dt - a[0]) / (b[0] - a[0])) : 1;
+      const lerp = (i) => a[i] + (b[i] - a[i]) * u;
+      return { pos: V(lerp(1), lerp(2), lerp(3)), quat: quat([a[4], a[5], a[6], a[7]]).slerp(quat([b[4], b[5], b[6], b[7]]), u) };
+    }
+    return null;
+  }
+
   // Merge a scene response from the server.
   update(sc) {
     this.cell = sc.cell;
     this.offset = sc.now_ms - Date.now();
     this.buildPlaces(sc.places || []);
+    this.buildBarriers(sc.barriers || []);
+    for (const f of sc.falls || []) {
+      const fs = this.falls.get(f.object_id) || [];
+      if (!fs.some((x) => x.id === f.id)) { fs.push(f); fs.sort((a, b) => a.id - b.id); }
+      if (fs.length > 6) fs.splice(0, fs.length - 6);
+      this.falls.set(f.object_id, fs);
+    }
     if (!this.arm) {
       this.arm = new Arm(this.cell, false);
       this.scene.add(this.arm.group);
@@ -263,6 +344,7 @@ class Cell {
       }
       e.at = o.at;
       e.pos = o.x == null ? null : V(o.x, o.y, o.z);
+      e.quat = o.q ? quat(o.q) : new THREE.Quaternion();
       e.mesh.visible = o.at !== "outside";
     }
     for (const [id, e] of this.parts) if (!seen.has(id)) { this.partsGroup.remove(e.mesh); this.parts.delete(id); }
@@ -276,7 +358,11 @@ class Cell {
     }
     if (!seg) return { q: rest.q, grip: rest.grip, seg: null };
     const u = seg.play_ms > 0 ? ease((t - seg.at_ms) / seg.play_ms) : 1;
-    const q = seg.from.q.map((a, i) => a + (seg.to.q[i] - a) * u);
+    let q = seg.from.q.map((a, i) => a + (seg.to.q[i] - a) * u);
+    if (STRAIGHT.has(seg.kind) && u > 0 && u < 1 && this.cell) {
+      const a = tipOf(this.cell, seg.from.q), b = tipOf(this.cell, seg.to.q);
+      q = ikOf(this.cell, a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u) || q;
+    }
     const grip = seg.from.grip + (seg.to.grip - seg.from.grip) * u;
     return { q, grip, seg: u < 1 ? seg : seg };
   }
@@ -291,11 +377,19 @@ class Cell {
       const carrying = a.seg ? a.seg.carrying : null;
       for (const [id, e] of this.parts) {
         const inHand = carrying === id || (e.at === "gripper" && (!carrying || carrying === id));
+        const falling = inHand ? null : this.fallAt(id, t);
         if (inHand) {
+          // Held turned with the arm's base, as the simulator holds it.
           e.mesh.position.set(tip.x, tip.y - partHeight(e.kind) / 2, tip.z);
+          e.mesh.quaternion.setFromAxisAngle(UP, a.q[0]);
+          e.mesh.visible = true;
+        } else if (falling) {
+          e.mesh.position.copy(falling.pos);
+          e.mesh.quaternion.copy(falling.quat);
           e.mesh.visible = true;
         } else if (e.pos) {
           e.mesh.position.copy(e.pos);
+          if (e.quat) e.mesh.quaternion.copy(e.quat);
         }
       }
       // Highlight where the arm is heading.
@@ -375,7 +469,7 @@ window.RevolveCell = {
     try { cell = new Cell(el); return true; } catch (e) { console.warn("3D view unavailable:", e); return false; }
   },
   update(sc) { if (cell) cell.update(sc); },
-  reset() { if (cell) { cell.motions = []; cell.parts.forEach((e) => cell.partsGroup.remove(e.mesh)); cell.parts.clear(); cell.layoutKey = ""; cell.stopPreview(); } },
+  reset() { if (cell) { cell.motions = []; cell.parts.forEach((e) => cell.partsGroup.remove(e.mesh)); cell.parts.clear(); cell.falls.clear(); cell.layoutKey = ""; cell.barrierKey = ""; cell.stopPreview(); } },
   preview(motions, rate) { if (cell) cell.preview(motions, rate || 4); },
   stopPreview() { if (cell) cell.stopPreview(); },
   onHud(fn) { if (cell) cell.hud = fn; },

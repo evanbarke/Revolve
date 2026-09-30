@@ -883,7 +883,11 @@ fn program_write(ctx: &Ctx, body: &str, progress: &dyn Fn(Value)) -> Result<Valu
     let ledger = dir.join(format!("{}.json", crate::util::fresh_id("program")));
     BudgetLedger::init(&ledger, 3)?;
     let mut planner = LivePlanner::new(cfg, &ledger).map_err(|e| Error::new(e.to_string()))?;
-    let summary = crate::script::table_summary(&t.obs);
+    let mut summary = crate::script::table_summary(&t.obs);
+    let barriers = SimWorld::open(&t.world)?.barrier_labels()?;
+    if !barriers.is_empty() {
+        summary["barriers"] = json!(barriers);
+    }
     let env = crate::script::CheckEnv::from(&t.obs, &crate::policy::Policy::default());
     let started = std::time::Instant::now();
     let (mut tin, mut tout) = (0u64, 0u64);

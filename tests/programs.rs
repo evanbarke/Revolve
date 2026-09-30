@@ -306,6 +306,56 @@ expect holding() == None, \"the arm holds nothing\"
 }
 
 #[test]
+fn the_arm_goes_over_a_wall_and_a_caged_tray_is_refused_before_anything_moves() {
+    let state = temp_state("prog-barriers");
+    // Every move from the pile to tray 1 crosses the wall.
+    let over = "for p in parts(kind=\"red_block\", at=\"table\"):
+    move(p, \"tray-1\")
+expect count(\"tray-1\", kind=\"red_block\") == 3, \"the red blocks are in tray 1\"
+";
+    let (run, dir) = start(&state, "wall-table", over);
+    supervise(&state, &run);
+    assert_eq!(
+        report(&dir)["all_expectations_held"],
+        true,
+        "{}",
+        report(&dir)
+    );
+    let kinds: Vec<String> = SimWorld::open(&dir.join("world.db"))
+        .unwrap()
+        .motion_log()
+        .unwrap()
+        .iter()
+        .map(|m| m["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(kinds.iter().any(|k| k == "rise"), "went over: {kinds:?}");
+    // Tray 2 is inside a cage: refused before picking anything up.
+    let caged = "r = parts(kind=\"red_block\", at=\"table\")
+ok = move(r[0], \"tray-2\")
+expect holding() == None, \"the arm holds nothing\"
+expect count(\"table\", kind=\"red_block\") == 3, \"the red blocks are still on the table\"
+";
+    let (run, dir) = start(&state, "caged-tray", caged);
+    supervise(&state, &run);
+    let rep = report(&dir);
+    assert_eq!(rep["all_expectations_held"], true, "{rep}");
+    let why = rep["refusals"][0]["why"].as_str().unwrap();
+    assert!(
+        why.contains("the cage around tray 2") && why.contains("nothing was picked up"),
+        "{why}"
+    );
+    let applied = SimWorld::open(&dir.join("world.db"))
+        .unwrap()
+        .truth()
+        .unwrap()
+        .receipts
+        .into_iter()
+        .filter(|r| r.outcome == "applied")
+        .count();
+    assert_eq!(applied, 0, "the arm did nothing");
+}
+
+#[test]
 fn a_session_keeps_the_table_between_requests() {
     let state = temp_state("prog-session");
     let first = "for p in parts(kind=\"red_block\", at=\"table\"):\n    move(p, \"tray-1\")\nexpect count(\"tray-1\", kind=\"red_block\") == 3, \"the red blocks are in tray 1\"\n";
