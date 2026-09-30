@@ -521,7 +521,7 @@ mod tests {
         let (ca, cb) = (corners(a), corners(b));
         let axes = [a.yaw, a.yaw + PI / 2.0, b.yaw, b.yaw + PI / 2.0];
         axes.iter().all(|t| {
-            let (ax, ay) = (cos(t), sin(t));
+            let (ax, ay) = (cos(*t), sin(*t));
             let proj = |pts: &Vec<(f64, f64)>| {
                 pts.iter()
                     .map(|(x, y)| x * ax + y * ay)

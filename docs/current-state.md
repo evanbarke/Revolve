@@ -136,6 +136,30 @@ Writing: after an answer cut off at `max_tokens`, the retry asks for a brief one
 tokens, seconds) are recorded next to its ledger as
 `budgets/program-*.attempts.json`.
 
+## Physics (D19)
+
+The cell is simulated with Rapier (`src/physics.rs`): gravity, contact,
+friction, solid bins, trays, barriers and the robot's column. Every arm path is
+collision-checked, and routed over what is in the way or refused before anything
+moves. Placed parts fall and settle, and the 3D view plays the recorded falls.
+New playground tables: `wall-table` (the arm lifts parts over a 22 cm wall) and
+`caged-tray` (tray 2 cannot be reached; a `move` there is refused before
+anything is picked up, naming the cage). Verified 2026-09-30:
+- 93 tests pass on Windows, including physics unit tests (a fall into a bin; a
+  repeated drop bit for bit; a barrier in the arm's way; a covered part) and
+  program tests (a wall gone over; a caged tray refused).
+- Both benchmark suites on Windows and on the Jetson: 180 of 180 runs give the
+  same verdicts as before physics.
+- Cross-machine determinism: 5 example programs, including the power-cut and
+  thief tables (30 simulated falls), leave every part at the same position and
+  rotation, bit for bit, on Windows x86_64 and the Jetson (aarch64). This needed
+  portable math (`libm`) in the cell's geometry: the platform's `sin`/`cos`
+  differ in the last bit.
+
+Simplifications: grasp is an attachment; the arm never pushes (a protective
+stop); vertical moves are straight lines, others joint moves; routes go over
+obstacles, not around them.
+
 ## Known limitations / open issues
 
 - Scripted planner assigns trays before checking destination availability at
@@ -154,10 +178,9 @@ tokens, seconds) are recorded next to its ledger as
 
 ## Next concrete tasks
 
-1. **Vision step 3: movement in simulation.** Give the arm joints, reach, speed
-   limits and collision checks. Programs keep calling pick/place, and the
-   compiler/rehearsal proves every motion stays within limits before the arm
-   moves. The browser arm already shows where this goes.
+1. **Vision step 3: movement in simulation** — done (D18, D19): joints, reach,
+   speed limits, rigid-body physics and collision-checked paths. Next here:
+   routes around obstacles (not only over), and friction grasps.
 2. **Measure "optimized for the AI".** Run the step-2 comparison: Revolve Script
    against an AI writing Python directly against the same capabilities, across
    the playground and fault tables (first-try acceptance, repairs, cost,
