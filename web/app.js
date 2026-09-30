@@ -803,7 +803,8 @@ function writingCard(card, title) {
 function updateWriting(w, st) {
   w.secs.textContent = Math.round((Date.now() - w.t0) / 1000) + " s";
   const repairing = st.phase === "writing" && st.problems && st.problems.length;
-  const phase = repairing ? "The checker found problems; the AI is fixing them" : PHASES[st.phase] || st.phase;
+  const phase = st.phase === "writing" && st.cut_off ? "The answer was too long and got cut off; the AI is writing a shorter one"
+    : repairing ? "The checker found problems; the AI is fixing them" : PHASES[st.phase] || st.phase;
   if (w.phase.textContent !== phase) w.phase.textContent = phase;
   w.hint.hidden = !(st.phase === "writing" && !st.explanation && !st.program);
   const probs = (st.problems || []).join("\n");
@@ -940,7 +941,8 @@ function renderHud(v) {
 function hudWriting(st, t0) {
   const secs = Math.round((Date.now() - t0) / 1000) + " s";
   const repairing = st.phase === "writing" && st.problems && st.problems.length;
-  const phase = repairing ? "The checker found problems; the AI is fixing them" : st.phase === "checking" ? "Checking and compiling to machine code" : "The AI is writing the program";
+  const phase = st.phase === "writing" && st.cut_off ? "The answer was too long and got cut off; the AI is writing a shorter one"
+    : repairing ? "The checker found problems; the AI is fixing them" : st.phase === "checking" ? "Checking and compiling to machine code" : "The AI is writing the program";
   const detail = st.explanation || (st.program ? "" : "It thinks first (usually 5–15 seconds), then the code appears here.");
   hud(phase + " · " + secs, detail, st.program || "");
 }

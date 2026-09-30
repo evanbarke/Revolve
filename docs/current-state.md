@@ -111,6 +111,31 @@ API give 200; a DNS-name Host gives 403; a POST without the custom header gives
 403; loopback needs no key. Windows Firewall must allow the program on private
 networks (the owner's choice; Revolve does not change the firewall).
 
+## Public access (Jetson behind the owner's proxy)
+
+On the owner's request the Jetson serves https://revolve.samix-technology.com.
+The service (`deploy/revolve-public.user.service`, a systemd user unit with its
+own state in `~/revolve/state/public`) runs `serve --lan --public-host`. The
+proxy is mailcow's nginx on the proxy host (`deploy/nginx-revolve.conf`; on the
+host it is split into `00-revolve.conf` and `00-revolve.ssl.conf`, mode 600,
+because it holds the key). The proxy asks for a password (basic auth, HTTPS
+only, a Let's Encrypt certificate renewed by the host's certbot) and then adds
+the access key as `X-Revolve-Key`; the password is not forwarded. Verified
+2026-09-30 through the proxy:
+- plain http gives a 301;
+- no password or a wrong one gives 401; the right one gives 200;
+- an action without the client header, or from another origin, gives 403;
+- an action from the site's own origin works.
+
+On the Jetson itself: no key gives 401 and a foreign Host gives 403. The
+password is weak by the owner's choice. The spend cap is 60 AI calls per server
+start (3 per request).
+
+Writing: after an answer cut off at `max_tokens`, the retry asks for a brief one
+(low effort, 32k tokens). Every request's attempts (stop reason, effort, output
+tokens, seconds) are recorded next to its ledger as
+`budgets/program-*.attempts.json`.
+
 ## Known limitations / open issues
 
 - Scripted planner assigns trays before checking destination availability at

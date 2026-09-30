@@ -590,16 +590,19 @@ impl LivePlanner {
         table: &Value,
         previous: Option<(&str, &[String])>,
     ) -> (std::result::Result<WrittenProgram, PlannerError>, CallInfo) {
-        self.write_program_streaming(request, table, previous, &mut |_| {})
+        self.write_program_streaming(request, table, previous, false, &mut |_| {})
     }
 
     /// As `write_program`, streaming: `on_text` receives the model's output so far
     /// (partial JSON) as it arrives, so a person can watch the program being written.
+    /// `brief`: the last answer ran out of room, so ask for less thinking, a
+    /// shorter program, and allow more room.
     pub fn write_program_streaming(
         &mut self,
         request: &str,
         table: &Value,
         previous: Option<(&str, &[String])>,
+        brief: bool,
         on_text: &mut dyn FnMut(&str),
     ) -> (std::result::Result<WrittenProgram, PlannerError>, CallInfo) {
         let system = format!("{WRITE_SYSTEM}\n\n{}", crate::script::GUIDE);
@@ -608,10 +611,15 @@ impl LivePlanner {
             input["previous_program"] = json!(src);
             input["problems"] = json!(problems);
         }
+        if brief {
+            input["note"] = json!(
+                "Your last answer was cut off because it was too long. Think briefly and keep the program short."
+            );
+        }
         let mut body = self.base_body(&system, &input);
-        body["output_config"]["effort"] = json!("medium");
+        body["output_config"]["effort"] = json!(if brief { "low" } else { "medium" });
         // Room for thinking plus a program; streaming keeps long answers responsive.
-        body["max_tokens"] = json!(16000);
+        body["max_tokens"] = json!(if brief { 32000 } else { 16000 });
         body["output_config"]["format"] =
             json!({"type": "json_schema", "schema": program_schema()});
         let (r, info) = self.post_streaming(body, on_text);
@@ -1647,6 +1655,37 @@ data: {v}
         );
         out += &ev(json!({"type": "message_stop"}));
         Value::String(out)
+    }
+
+    #[test]
+    fn a_cut_off_answer_is_reported_and_the_retry_asks_for_a_brief_one() {
+        let answer = json!({"understood": true, "explanation": "x", "program": "say(\"hi\")", "not_possible": ""});
+        let cut = Value::String(
+            sse(answer.clone())
+                .as_str()
+                .unwrap()
+                .replace("end_turn", "max_tokens"),
+        );
+        let (url, h) = fake_server(vec![(200, cut), (200, sse(answer))]);
+        let (mut p, _b) = fake_planner(&url, 3, 0);
+        let table = json!({"places": [], "arm_holds": null});
+        let (r, info) = p.write_program_streaming("hi", &table, None, false, &mut |_| {});
+        assert!(
+            matches!(&r, Err(PlannerError::Malformed { message }) if message.contains("max_tokens")),
+            "a cut-off answer is never used"
+        );
+        assert_eq!(info.detail.unwrap()["stop_reason"], "max_tokens");
+        let (r, _) = p.write_program_streaming("hi", &table, None, true, &mut |_| {});
+        assert!(r.is_ok());
+        let seen = h.join().unwrap();
+        let (first, retry) = (&seen[0].1, &seen[1].1);
+        assert_eq!(first["output_config"]["effort"], "medium");
+        assert_eq!(first["max_tokens"], 16000);
+        assert_eq!(retry["output_config"]["effort"], "low", "less thinking");
+        assert_eq!(retry["max_tokens"], 32000, "more room");
+        let user: Value =
+            serde_json::from_str(retry["messages"][0]["content"].as_str().unwrap()).unwrap();
+        assert!(user["note"].as_str().unwrap().contains("cut off"));
     }
 
     #[test]

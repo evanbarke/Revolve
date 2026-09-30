@@ -890,9 +890,18 @@ fn program_write(ctx: &Ctx, body: &str, progress: &dyn Fn(Value)) -> Result<Valu
     let mut attempts = vec![];
     let mut previous: Option<(String, Vec<String>)> = None;
     let mut last = None;
+    // After a cut-off answer, ask for a brief one (less thinking, more room).
+    let mut brief = false;
+    // What each attempt did, kept next to its ledger so a failure can be explained.
+    let record = |attempts: &[Value], outcome: &str| {
+        let _ = std::fs::write(
+            ledger.with_extension("attempts.json"),
+            json!({"request": text, "outcome": outcome, "attempts": attempts}).to_string(),
+        );
+    };
     for attempt in 1..=3 {
         progress(
-            json!({"phase": "writing", "attempt": attempt, "problems": previous.as_ref().map(|(_, p)| p.clone())}),
+            json!({"phase": "writing", "attempt": attempt, "cut_off": brief, "problems": previous.as_ref().map(|(_, p)| p.clone())}),
         );
         if AI_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= MAX_AI_CALLS_PER_PROCESS {
             crate::bail!(
@@ -904,10 +913,12 @@ fn program_write(ctx: &Ctx, body: &str, progress: &dyn Fn(Value)) -> Result<Valu
             &text,
             &summary,
             previous.as_ref().map(|(s, p)| (s.as_str(), p.as_slice())),
+            brief,
             &mut |partial: &str| {
                 progress(json!({
                     "phase": "writing",
                     "attempt": attempt,
+                    "cut_off": brief,
                     "problems": problems,
                     "explanation": crate::planner::live::partial_json_string(partial, "explanation"),
                     "program": crate::planner::live::partial_json_string(partial, "program"),
@@ -919,32 +930,47 @@ fn program_write(ctx: &Ctx, body: &str, progress: &dyn Fn(Value)) -> Result<Valu
             tin += a;
             tout += b;
         }
+        let stop = info
+            .detail
+            .as_ref()
+            .and_then(|d| d["stop_reason"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let call = json!({
+            "stop_reason": stop,
+            "effort": if brief { "low" } else { "medium" },
+            "output_tokens": info.usage.map(|u| u.1),
+            "seconds": info.latency_ms as f64 / 1000.0,
+        });
         let w = match r {
             Ok(w) => w,
             // A cut-off or garbled answer is one failed attempt: ask again.
             Err(crate::planner::PlannerError::Malformed { message }) if attempt < 3 => {
-                attempts.push(json!({"accepted": false, "error": message}));
+                brief = stop == "max_tokens";
+                attempts.push(json!({"accepted": false, "error": message, "call": call}));
                 continue;
             }
             Err(e) => {
+                attempts.push(json!({"accepted": false, "error": e.to_string(), "call": call}));
+                record(&attempts, "error");
                 return Err(Error::new(format!(
                     "The AI could not write a program ({e})."
                 )));
             }
         };
         if !w.understood && w.source.trim().is_empty() {
-            attempts.push(json!({"accepted": false, "understood": false}));
+            attempts.push(json!({"accepted": false, "understood": false, "call": call}));
             last = Some((w, None));
             break;
         }
         match crate::script::compile(&w.source, &env) {
             Ok(c) => {
-                attempts.push(json!({"accepted": true}));
+                attempts.push(json!({"accepted": true, "call": call}));
                 last = Some((w, Some(c)));
                 break;
             }
             Err(d) => {
-                attempts.push(json!({"accepted": false, "diagnostics": diag_json(&d, &w.source)}));
+                attempts.push(json!({"accepted": false, "diagnostics": diag_json(&d, &w.source), "call": call}));
                 let lines: Vec<&str> = w.source.lines().collect();
                 let problems = d
                     .iter()
@@ -971,8 +997,17 @@ fn program_write(ctx: &Ctx, body: &str, progress: &dyn Fn(Value)) -> Result<Valu
         None => Value::Null,
     };
     let Some((w, compiled)) = last else {
+        record(&attempts, "no answer");
         crate::bail!("the AI did not answer");
     };
+    record(
+        &attempts,
+        if compiled.is_some() {
+            "accepted"
+        } else {
+            "not accepted"
+        },
+    );
     // "Run directly" skips the rehearsal (the program is still checked and compiled).
     let rehearse = v["rehearse"].as_bool().unwrap_or(true);
     let rehearsal = match &compiled {
