@@ -610,7 +610,8 @@ impl LivePlanner {
         }
         let mut body = self.base_body(&system, &input);
         body["output_config"]["effort"] = json!("medium");
-        body["max_tokens"] = json!(8000);
+        // Room for thinking plus a program; streaming keeps long answers responsive.
+        body["max_tokens"] = json!(16000);
         body["output_config"]["format"] =
             json!({"type": "json_schema", "schema": program_schema()});
         let (r, info) = self.post_streaming(body, on_text);

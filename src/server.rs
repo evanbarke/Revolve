@@ -855,7 +855,19 @@ fn program_write(ctx: &Ctx, body: &str, progress: &dyn Fn(Value)) -> Result<Valu
             tin += a;
             tout += b;
         }
-        let w = r.map_err(|e| Error::new(format!("The AI could not write a program ({e}).")))?;
+        let w = match r {
+            Ok(w) => w,
+            // A cut-off or garbled answer is one failed attempt: ask again.
+            Err(crate::planner::PlannerError::Malformed { message }) if attempt < 3 => {
+                attempts.push(json!({"accepted": false, "error": message}));
+                continue;
+            }
+            Err(e) => {
+                return Err(Error::new(format!(
+                    "The AI could not write a program ({e})."
+                )));
+            }
+        };
         if !w.understood && w.source.trim().is_empty() {
             attempts.push(json!({"accepted": false, "understood": false}));
             last = Some((w, None));

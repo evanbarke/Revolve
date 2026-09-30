@@ -726,6 +726,9 @@ function renderReview(card, r, opts) {
   if (r.accepted) {
     right.append(h("h3", {}, "Checked before anything moves"), checksList(r.compiled, r.native_target));
     right.append(h("h3", {}, "Rehearsal"), rehearsalView(r.rehearsal));
+    if (cell3d && r.rehearsal && r.rehearsal.motions && r.rehearsal.motions.length) {
+      right.append(h("p", { class: "muted small" }, "Watch the see-through arm in the robot cell below: it replays this rehearsal, then fades, leaving the parts where they will end up."));
+    }
   } else {
     right.append(h("h3", {}, "The checker found problems"), diagList(r.diagnostics), h("p", { class: "muted small" }, "Nothing ran. Change your words, or edit the program and check it again."));
     markLines(pre, { err: new Set((r.diagnostics || []).map((d) => d.line)) });
@@ -774,54 +777,93 @@ const PHASES = {
   rehearsing: "Rehearsing it on a copy of the table",
 };
 
-// Show the program as the AI writes it, then each check as it happens.
-function renderWriting(card, st, title, t0) {
+// Only one writing job at a time; a newer one makes older loops stop drawing.
+let writeGen = 0;
+let writingNow = false;
+
+// The writing card is built once per job and then only its texts change, so it
+// does not flicker while the program streams in.
+function writingCard(card, title) {
   clear(card);
   card.hidden = false;
-  card.append(h("div", { class: "prog-head" }, h("h2", {}, title), h("span", { class: "muted small" }, Math.round((Date.now() - t0) / 1000) + " s")));
+  const w = {
+    secs: h("span", { class: "muted small" }, "0 s"),
+    phase: h("span", { class: "dots" }, PHASES.starting),
+    hint: h("p", { class: "muted small" }, "It thinks first (usually 5–15 seconds), then the program appears here as it is written."),
+    problems: h("div", {}),
+    explain: h("p", { class: "explain" }),
+    code: h("div", {}),
+    program: null,
+    t0: Date.now(),
+  };
+  card.append(h("div", { class: "prog-head" }, h("h2", {}, title), w.secs), h("div", { class: "writing" }, w.phase), w.hint, w.problems, w.explain, w.code);
+  return w;
+}
+
+function updateWriting(w, st) {
+  w.secs.textContent = Math.round((Date.now() - w.t0) / 1000) + " s";
   const repairing = st.phase === "writing" && st.problems && st.problems.length;
-  card.append(h("div", { class: "writing" }, h("span", { class: "dots" }, repairing ? "The checker found problems; the AI is fixing them" : PHASES[st.phase] || st.phase)));
-  if (repairing) {
-    const box = h("div", {});
-    for (const p of st.problems) box.append(h("p", { class: "diag" }, p));
-    card.append(box);
+  const phase = repairing ? "The checker found problems; the AI is fixing them" : PHASES[st.phase] || st.phase;
+  if (w.phase.textContent !== phase) w.phase.textContent = phase;
+  w.hint.hidden = !(st.phase === "writing" && !st.explanation && !st.program);
+  const probs = (st.problems || []).join("\n");
+  if (w.problems.getAttribute("data-p") !== probs) {
+    w.problems.setAttribute("data-p", probs);
+    clear(w.problems);
+    for (const p of st.problems || []) w.problems.append(h("p", { class: "diag" }, p));
   }
-  if (st.phase === "writing" && !st.explanation && !st.program) card.append(h("p", { class: "muted small" }, "It thinks first (usually 5–15 seconds), then the program appears here as it is written."));
-  if (st.explanation) card.append(h("p", { class: "explain" }, st.explanation));
-  if (st.program) {
+  if (st.explanation && w.explain.textContent !== st.explanation) w.explain.textContent = st.explanation;
+  if (st.program && st.program !== w.program) {
+    w.program = st.program;
     const pre = codeView(st.program);
     pre.classList.add("typing");
-    card.append(pre);
+    clear(w.code);
+    w.code.append(pre);
     pre.scrollTop = pre.scrollHeight;
   }
 }
 
-// Start a writing job and follow it until it is done.
+// Start a writing job and follow it until it is done (or a newer job replaces it).
 async function followWriteJob(body, card, title) {
+  const gen = ++writeGen;
+  const w = writingCard(card, title);
   const { job } = await api("POST", "/api/programs/write", body);
-  const t0 = Date.now();
   for (;;) {
     await sleep(250);
+    if (gen !== writeGen) throw new Error("replaced by a newer request");
     const st = await api("GET", "/api/programs/jobs/" + encodeURIComponent(job));
+    if (gen !== writeGen) throw new Error("replaced by a newer request");
     if (st.phase === "done") return st.result;
     if (st.phase === "error") throw new Error(st.error);
-    renderWriting(card, st, title, t0);
+    updateWriting(w, st);
   }
 }
 
+function setWriting(on) {
+  writingNow = on;
+  const b = $("start-btn");
+  b.disabled = on;
+  if (on) b.textContent = "Writing…";
+  else syncStartButton();
+}
+
 async function writeProgram(text) {
+  if (writingNow) return; // one request at a time
+  setWriting(true);
+  if (cell3d) window.RevolveCell.stopPreview();
   const card = $("program-card");
-  const stop = writingState(card, "The AI is writing a program for: “" + text + "”");
-  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
   try {
     const r = await followWriteJob(Object.assign({ text }, startWhere()), card, "The program");
-    stop();
     reviewing = Object.assign(r, { request: text });
     renderReview(card, reviewing, { where: startWhere, onRun: runProgram, onChangeWords: () => { card.hidden = true; $("new-request").focus(); } });
   } catch (e) {
-    stop();
-    clear(card);
-    card.append(h("p", { class: "diag" }, e.message), h("div", { class: "buttons" }, actionButton("Change my words", () => { card.hidden = true; $("new-request").focus(); }, "ghost")));
+    if (e.message !== "replaced by a newer request") {
+      clear(card);
+      card.append(h("p", { class: "diag" }, e.message), h("div", { class: "buttons" }, actionButton("Try again", () => { card.hidden = true; $("new-run").requestSubmit(); }, "big"), actionButton("Change my words", () => { card.hidden = true; $("new-request").focus(); }, "ghost")));
+    }
+  } finally {
+    setWriting(false);
   }
 }
 
@@ -1040,13 +1082,13 @@ function programStory(v) {
 async function writeRevision() {
   const text = $("change-text").value.trim();
   if (!text || !current) return toast("Say what should change.");
+  if (writingNow) return;
+  setWriting(true);
   const card = $("revision-card");
-  const stop = writingState(card, "Paused. The AI is writing a new program from the table as it is now");
-  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
   const where = () => ({ run_id: current });
   try {
-    const r = await followWriteJob({ text, run_id: current }, card, "A new program for: “" + text + "”");
-    stop();
+    const r = await followWriteJob({ text, run_id: current }, card, "Paused. A new program for: “" + text + "”");
     revision = Object.assign(r, { request: text });
     renderReview(card, revision, {
       title: "A new program for: “" + text + "”",
@@ -1060,9 +1102,11 @@ async function writeRevision() {
       onChangeWords: async () => { card.hidden = true; if (r.paused_run) await act("start", {}, true); },
     });
   } catch (e) {
-    stop();
+    if (e.message === "replaced by a newer request") return;
     clear(card);
     card.append(h("p", { class: "diag" }, e.message), h("div", { class: "buttons" }, actionButton("Close and continue", async () => { card.hidden = true; if (view && view.state.status === "paused") await act("start", {}, true); }, "ghost")));
+  } finally {
+    setWriting(false);
   }
 }
 
@@ -1286,7 +1330,8 @@ function syncStartButton() {
   const b = $("start-btn");
   const program = isProgramStyle();
   b.hidden = !program && !$("interpretation").hidden;
-  b.textContent = program ? "Write the program" : $("new-request").value.trim() ? "Read my request" : "Start";
+  b.textContent = writingNow ? "Writing…" : program ? "Write the program" : $("new-request").value.trim() ? "Read my request" : "Start";
+  b.disabled = writingNow;
   $("examples").hidden = !program;
   $("start-note").textContent = program
     ? "The AI writes a program for your words (a few cents). Before you decide to run it, it is checked, compiled to machine code and rehearsed on a copy of the table."

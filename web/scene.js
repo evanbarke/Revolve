@@ -58,6 +58,7 @@ class Arm {
     const mat = ghost
       ? new THREE.MeshStandardMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.32, depthWrite: false })
       : new THREE.MeshStandardMaterial({ color: dark() ? 0xc9d1db : 0xe8ecf1, metalness: 0.35, roughness: 0.45 });
+    this.mat = mat;
     const accent = ghost ? mat : new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.2, roughness: 0.5 });
     const joint = ghost ? mat : new THREE.MeshStandardMaterial({ color: 0x3b4552, metalness: 0.5, roughness: 0.4 });
     const cyl = (r) => new THREE.Mesh(new THREE.CylinderGeometry(r, r, 1, 20), mat);
@@ -353,7 +354,14 @@ class Cell {
       gp.position.set(tip.x, tip.y - partHeight((this.parts.get(id) || {}).kind) / 2, tip.z);
       gp.userData.id = id;
     }
-    if (t >= g.total && !g.done) g.done = true;
+    // When the replay ends, the see-through arm fades away; the parts it moved
+    // stay where the rehearsal left them (the predicted result).
+    if (t >= g.total) {
+      if (!g.doneAt) g.doneAt = Date.now();
+      const f = Math.min(1, (Date.now() - g.doneAt) / 1200);
+      g.arm.mat.opacity = 0.32 * (1 - f);
+      if (f >= 1 && g.arm.group.parent) this.scene.remove(g.arm.group);
+    }
   }
 }
 
