@@ -452,6 +452,27 @@ impl RunStore {
         })
     }
 
+    /// A named on/off setting of the run (e.g. `session`).
+    pub fn set_flag(&self, key: &str, on: bool) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?1, ?2)",
+            params![format!("flag:{key}"), if on { "1" } else { "0" }],
+        )?;
+        Ok(())
+    }
+
+    pub fn flag(&self, key: &str) -> Result<bool> {
+        let v: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                params![format!("flag:{key}")],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(v.as_deref() == Some("1"))
+    }
+
     pub fn meta(&self) -> Result<RunMeta> {
         let meta: String =
             self.conn

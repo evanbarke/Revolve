@@ -90,6 +90,9 @@ pub struct Executor {
     programs: Option<ProgramHost>,
     /// A program run: the plan is a Revolve Script program (see runtime/script.rs).
     script_mode: bool,
+    /// A session: when a program finishes, the run waits for the next request on
+    /// the same table instead of ending.
+    session: bool,
     scripts: Option<crate::script::host::ScriptHost>,
 }
 
@@ -106,6 +109,7 @@ pub fn drive(
     let meta = store.meta()?;
     let engine = ExecEngine::parse(&meta.engine).map_err(crate::util::Error::new)?;
     let script_mode = meta.planner == "program";
+    let session = script_mode && store.flag("session")?;
     store.set_owner(Some(std::process::id()))?;
     let mut ex = Executor {
         store,
@@ -117,6 +121,7 @@ pub fn drive(
         engine,
         programs: None,
         script_mode,
+        session,
         scripts: None,
     };
     let started = Instant::now();
@@ -464,6 +469,9 @@ impl Executor {
             let actions = self.store.plan_actions(plan.plan_seq)?;
             if self.script_mode {
                 let (next, effect) = match self.run_script(&plan, &actions)? {
+                    ScriptOutcome::Finish if self.session => {
+                        return self.session_program_done(&plan);
+                    }
                     ScriptOutcome::Finish => {
                         match self.finalize(None, format!("program #{} finished", plan.plan_seq))? {
                             Some(s) => {

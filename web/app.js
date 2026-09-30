@@ -824,9 +824,8 @@ function updateWriting(w, st) {
 }
 
 // Start a writing job and follow it until it is done (or a newer job replaces it).
-async function followWriteJob(body, card, title) {
+async function followJob(body, onUpdate) {
   const gen = ++writeGen;
-  const w = writingCard(card, title);
   const { job } = await api("POST", "/api/programs/write", body);
   for (;;) {
     await sleep(250);
@@ -835,8 +834,13 @@ async function followWriteJob(body, card, title) {
     if (gen !== writeGen) throw new Error("replaced by a newer request");
     if (st.phase === "done") return st.result;
     if (st.phase === "error") throw new Error(st.error);
-    updateWriting(w, st);
+    onUpdate(st);
   }
+}
+
+async function followWriteJob(body, card, title) {
+  const w = writingCard(card, title);
+  return followJob(body, (st) => updateWriting(w, st));
 }
 
 function setWriting(on) {
@@ -845,6 +849,167 @@ function setWriting(on) {
   b.disabled = on;
   if (on) b.textContent = "Writing…";
   else syncStartButton();
+  const d = $("do-it");
+  d.disabled = on;
+  d.textContent = on ? "Working…" : "Do it";
+}
+
+// ------------------------------------------------------------------ the simple view
+
+const TERMINAL = ["completed", "partial", "stopped", "failed"];
+
+function hud(status, detail, code, actions) {
+  $("hud-status").textContent = status || "";
+  $("hud-detail").textContent = detail || "";
+  const c = $("hud-code");
+  c.hidden = !code;
+  if (code && c.textContent !== code) {
+    c.textContent = code;
+    c.scrollTop = c.scrollHeight;
+  }
+  $("hud-question").hidden = true;
+  // Rebuild buttons only when they change, so a tap is never lost to a refresh.
+  const a = $("hud-actions");
+  const key = (actions || []).map((x) => x[0]).join("|");
+  if (a.getAttribute("data-k") !== key) {
+    a.setAttribute("data-k", key);
+    clear(a);
+    for (const [label, , cls] of actions || []) {
+      const b = h("button", { type: "button", class: cls || "ghost" }, label);
+      b.addEventListener("click", () => b._fn && b._fn());
+      a.append(b);
+    }
+  }
+  [...a.children].forEach((b, i) => { b._fn = actions[i][1]; });
+}
+
+function hudIdle() {
+  hud("Tell the robot what to do.", "Type a request above and press Do it. The AI writes a program, it is compiled to machine code and the arm runs it here.");
+}
+
+// The overlay on the 3D cell for a program run.
+function renderHud(v) {
+  if (writingNow) return; // a writing job owns the overlay
+  const st = v.state.status;
+  const calls = programCalls(v);
+  const last = calls[calls.length - 1];
+  const src = ((v.program && v.program.source) || "").split("\n");
+  const codeLine = last && last.line ? (src[last.line - 1] || "").trim() : "";
+  const active = v.executor.active;
+  const crashed = !active && v.executor.last_exit_code === v.executor.simulated_crash_code;
+  const start = () => act("start", {}, true);
+  const finished = v.events.find((e) => e.kind === "program_finished"); // events are newest first
+  const checks = (rep) => ((rep && rep.expectations) || []).map((e) => (e.held ? "✓ " : "✗ ") + e.description).join("\n");
+  if ((st === "running" || st === "paused") && crashed) {
+    hud("The power went out (simulated)", "The arm stopped where it was. Continue: it first checks what the last move did, then carries on. Nothing is done twice.", "", [["Continue", start, "big"]]);
+  } else if (st === "running" && active) {
+    hud(last ? "Line " + last.line + " · " + describeCall(last) : "Starting the program", "", codeLine, [["Pause", () => act("pause", {}, true)]]);
+  } else if (st === "running" || st === "created") {
+    hud("Ready", "", "", [["Continue", start, "big"]]);
+  } else if (st === "paused") {
+    hud("Paused", "Nothing new will start until you continue. You can also type a new request.", codeLine, [["Continue", start, "big"]]);
+  } else if (st === "awaiting_human") {
+    const qn = v.questions.find((x) => x.status === "open" && x.goal_revision === v.goal_revision);
+    hud("The program is asking you", "", codeLine);
+    if (qn) {
+      $("hud-question").hidden = false;
+      $("hud-q").textContent = qn.prompt;
+      const o = $("hud-opts");
+      if (o.getAttribute("data-q") !== String(qn.question_id)) {
+        o.setAttribute("data-q", String(qn.question_id));
+        clear(o);
+        for (const opt of qn.options) o.append(actionButton(opt.label, () => act("answer", { question_id: qn.question_id, choice: opt.id }, true)));
+      }
+    }
+  } else if (st === "awaiting_planner" && finished) {
+    const rep = finished.data || {};
+    const exps = rep.expectations || [];
+    const held = exps.filter((e) => e.held).length;
+    hud(held === exps.length ? "Done ✓ " + held + " of " + exps.length + " checks passed" : "Done, but " + (exps.length - held) + " of " + exps.length + " checks did not pass",
+      checks(rep) + "\n\nChecked by looking at the table. Tell it what to do next.");
+  } else if (st === "awaiting_planner") {
+    hud("Waiting for a request", v.state.status_reason || "");
+  } else if (st === "blocked") {
+    hud("Stopped to check", v.state.status_reason || "", codeLine, [["Continue", start, "big"]]);
+  } else if (TERMINAL.includes(st)) {
+    const rep = v.state.final_report || {};
+    hud(st === "completed" ? "Done ✓" : st === "partial" ? "Done, but not every check passed" : st === "stopped" ? "Stopped" : "Could not finish", checks(rep) || v.state.status_reason || "");
+  }
+}
+
+function hudWriting(st, t0) {
+  const secs = Math.round((Date.now() - t0) / 1000) + " s";
+  const repairing = st.phase === "writing" && st.problems && st.problems.length;
+  const phase = repairing ? "The checker found problems; the AI is fixing them" : st.phase === "checking" ? "Checking and compiling to machine code" : "The AI is writing the program";
+  const detail = st.explanation || (st.program ? "" : "It thinks first (usually 5–15 seconds), then the code appears here.");
+  hud(phase + " · " + secs, detail, st.program || "");
+}
+
+// Continue on the table shown, or start a fresh one.
+function sessionRun() {
+  return current && view && view.program && !TERMINAL.includes(view.state.status) && view.meta.scenario_id === $("scenario-select").value ? current : null;
+}
+
+// Do it: the AI writes the program, it is checked and compiled, and it runs at once.
+async function directRun(text, example) {
+  if (writingNow) return;
+  setWriting(true);
+  if (cell3d) window.RevolveCell.stopPreview();
+  const session = sessionRun();
+  const t0 = Date.now();
+  try {
+    let r;
+    if (example) {
+      r = { accepted: true, source: example.source, explanation: example.explanation, by: "example (no AI)" };
+    } else {
+      hudWriting({ phase: "starting" }, t0);
+      const body = Object.assign({ text, rehearse: false }, session ? { run_id: session } : { scenario: $("scenario-select").value });
+      r = await followJob(body, (st) => hudWriting(st, t0));
+    }
+    if (!r.accepted) {
+      const why = r.understood === false && r.not_possible ? r.not_possible
+        : (r.diagnostics || []).map((d) => "line " + d.line + ": " + d.message).join("\n") || "The program did not pass the checker.";
+      hud("Couldn't do that", why + (r.paused_run ? "\n\nThe previous program continues." : ""), r.source || "");
+      if (r.paused_run) await act("start", {}, true);
+      return;
+    }
+    hud("Compiled to machine code · starting", r.explanation || "", r.source);
+    const program = { source: r.source, explanation: r.explanation || "", request: text, author: r.by || "" };
+    if (session) {
+      await act("program", { program }, true);
+    } else {
+      const out = await api("POST", "/api/runs", { scenario: $("scenario-select").value, session: true, program });
+      await loadRuns(out.run_id);
+      showMode();
+      history.replaceState(null, "", "#run=" + encodeURIComponent(out.run_id));
+      await act("start", {}, true);
+    }
+    $("ask").value = "";
+  } catch (e) {
+    if (e.message !== "replaced by a newer request") hud("Couldn't do that", e.message);
+  } finally {
+    setWriting(false);
+  }
+}
+
+function doIt() {
+  const text = $("ask").value.trim();
+  if (!text) { $("ask").focus(); return; }
+  if (!isProgramStyle()) {
+    // The earlier step-list flow lives in the Advanced view.
+    setAdvanced(true);
+    $("new-request").value = text;
+    $("new-run").requestSubmit();
+    return;
+  }
+  if ($("direct-run").checked) return directRun(text);
+  return writeProgram(text);
+}
+
+function setAdvanced(on) {
+  document.body.classList.toggle("simple-ui", !on);
+  $("adv-toggle").textContent = on ? "Simple view" : "Advanced";
+  try { localStorage.setItem("revolve-advanced", on ? "1" : "0"); } catch { /* not needed to work */ }
 }
 
 async function writeProgram(text) {
@@ -856,11 +1021,11 @@ async function writeProgram(text) {
   try {
     const r = await followWriteJob(Object.assign({ text }, startWhere()), card, "The program");
     reviewing = Object.assign(r, { request: text });
-    renderReview(card, reviewing, { where: startWhere, onRun: runProgram, onChangeWords: () => { card.hidden = true; $("new-request").focus(); } });
+    renderReview(card, reviewing, { where: startWhere, onRun: runProgram, onChangeWords: () => { card.hidden = true; $("ask").focus(); } });
   } catch (e) {
     if (e.message !== "replaced by a newer request") {
       clear(card);
-      card.append(h("p", { class: "diag" }, e.message), h("div", { class: "buttons" }, actionButton("Try again", () => { card.hidden = true; $("new-run").requestSubmit(); }, "big"), actionButton("Change my words", () => { card.hidden = true; $("new-request").focus(); }, "ghost")));
+      card.append(h("p", { class: "diag" }, e.message), h("div", { class: "buttons" }, actionButton("Try again", () => { card.hidden = true; doIt(); }, "big"), actionButton("Change my words", () => { card.hidden = true; $("ask").focus(); }, "ghost")));
     }
   } finally {
     setWriting(false);
@@ -902,7 +1067,7 @@ async function loadExamples() {
   clear(box);
   if (!examples.length) return;
   box.append(h("span", { class: "muted small" }, "Or try an example (no AI needed):"));
-  for (const ex of examples) box.append(actionButton(ex.title, () => checkExample(ex), "ghost"));
+  for (const ex of examples) box.append(actionButton(ex.title, () => ($("direct-run").checked ? directRun(ex.title, ex) : checkExample(ex)), "ghost"));
 }
 
 // ---- a running program
@@ -1212,6 +1377,7 @@ function mountCell() {
   $("workspace-card").hidden = cell3d;
 }
 window.addEventListener("revolve-cell-ready", () => { mountCell(); pollCell(); });
+setTimeout(() => { if (!cell3d) { $("workspace-card").hidden = false; } }, 4000);
 
 async function pollCell() {
   if (!cell3d || cellBusy) return;
@@ -1344,18 +1510,19 @@ function showInterpretation(on) {
 
 function changeWords() {
   showInterpretation(false);
-  $("new-request").focus();
+  $("ask").focus();
 }
 
 function newRequest() {
   $("cell-hud").textContent = "";
+  hudIdle();
   current = null;
   view = null;
   $("run-select").value = "";
   history.replaceState(null, "", "#");
   showInterpretation(false);
   showMode();
-  $("new-request").focus();
+  $("ask").focus();
 }
 
 function renderEmpty() {
@@ -1382,6 +1549,8 @@ function render(v) {
     renderKits(v, trayKit);
   }
   drawWorkspace(v, trayKit);
+  if (isProgram) renderHud(v);
+  else if (!writingNow) hud($("now-title").textContent, $("now-detail").textContent);
   if (isProgram) renderStoryLines(programStory(v));
   else renderStory(v, trayKit);
   if (!$("tech").hidden) renderTech(v);
@@ -1449,7 +1618,7 @@ function wire() {
     e.preventDefault();
     const text = $("new-request").value.trim();
     if (isProgramStyle()) {
-      if (!text) { toast("Say what you want the robot to do, or pick an example."); $("new-request").focus(); return; }
+      if (!text) { toast("Say what you want the robot to do, or pick an example."); $("ask").focus(); return; }
       return writeProgram(text);
     }
     if (!text) return startRun(null);
@@ -1486,6 +1655,12 @@ function wire() {
   });
   $("style-select").addEventListener("change", () => { showInterpretation(false); syncStartButton(); });
   $("change-write").addEventListener("click", writeRevision);
+  $("do-it").addEventListener("click", doIt);
+  $("ask").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doIt(); }
+  });
+  $("adv-toggle").addEventListener("click", () => setAdvanced(document.body.classList.contains("simple-ui")));
+  $("btn-new-table").addEventListener("click", () => { newRequest(); hudIdle(); pollCell(); });
   $("correct-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const comps = {};
@@ -1508,6 +1683,10 @@ function wire() {
 
 (async function main() {
   wire();
+  let adv = false;
+  try { adv = localStorage.getItem("revolve-advanced") === "1"; } catch { /* default: simple */ }
+  setAdvanced(adv);
+  hudIdle();
   mountCell();
   setInterval(pollCell, 250);
   const m = /run=([A-Za-z0-9_-]+)/.exec(location.hash);

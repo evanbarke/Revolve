@@ -481,6 +481,34 @@ impl Executor {
         Ok(Some(status.into()))
     }
 
+    /// In a session, a finished program leaves the run open for the next request:
+    /// its report is recorded and the run waits on the same table.
+    pub(super) fn session_program_done(&mut self, plan: &PlanRow) -> Result<String> {
+        if let Some(r) = self.reconcile_all()? {
+            return self.block(&r);
+        }
+        let report = self.script_report("done", &format!("program #{} finished", plan.plan_seq))?;
+        let held = report["expectations"]
+            .as_array()
+            .map(|e| e.iter().filter(|x| x["held"] == json!(true)).count())
+            .unwrap_or(0);
+        let total = report["expectations"]
+            .as_array()
+            .map(|e| e.len())
+            .unwrap_or(0);
+        self.store.set_plan_status(plan.plan_seq, "finished")?;
+        self.store.set_active_plan(None)?;
+        self.event(
+            "program_finished",
+            &format!("program #{} finished: {held} of {total} check(s) held, checked by looking at the table; {} move(s)", plan.plan_seq, report["moves"]),
+            None,
+            Some(report),
+        )?;
+        self.store
+            .set_status(R_AWAITING_PLANNER, Some("ready for the next request"))?;
+        Ok(R_AWAITING_PLANNER.into())
+    }
+
     pub(super) fn finish_cancel_script(&mut self) -> Result<String> {
         self.store.invalidate_pending(A_CANCELLED)?;
         if let Some(p) = self.active_plan()? {

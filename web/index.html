@@ -7,16 +7,17 @@
 <title>Revolve Workspace</title>
 <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body class="simple-ui">
 <header class="top">
   <div class="brand">
     <h1>Revolve</h1>
     <p class="sub">Tell a robot arm what to do. The AI writes the program, the compiler checks it, then it runs (simulated arm, no real robot).</p>
   </div>
   <div class="runbar">
-    <label class="inline">Previous runs <select id="run-select"></select></label>
-    <button id="btn-refresh" class="ghost" type="button">Refresh</button>
-    <label class="check inline"><input type="checkbox" id="tech-toggle"> Technical details</label>
+    <label class="inline adv">Previous runs <select id="run-select"></select></label>
+    <button id="btn-refresh" class="ghost adv" type="button">Refresh</button>
+    <label class="check inline adv"><input type="checkbox" id="tech-toggle"> Technical details</label>
+    <button id="adv-toggle" class="ghost" type="button">Advanced</button>
   </div>
 </header>
 
@@ -25,8 +26,14 @@
 </div>
 
 <main class="simple">
-  <!-- Start a run -->
-  <section class="card" id="start-card">
+  <!-- The request: the one thing you need -->
+  <section class="cmdbar" id="cmdbar">
+    <textarea id="ask" rows="2" maxlength="800" placeholder="Tell the robot what to do, e.g. “Put the red blocks in tray 1 and the washers in tray 4”"></textarea>
+    <button id="do-it" class="big" type="button">Do it</button>
+  </section>
+
+  <!-- Settings and the earlier flows (Advanced) -->
+  <section class="card adv" id="start-card">
     <div id="start-collapsed" class="start-collapsed" hidden>
       <button id="btn-new" type="button" class="ghost">New request</button>
       <span class="muted small">Previous runs stay listed at the top of the page.</span>
@@ -38,9 +45,9 @@
         <select id="scenario-select"></select>
       </label>
       <p id="scenario-desc" class="muted"></p>
-      <label><span id="request-label">What do you want?</span>
-        <textarea id="new-request" rows="2" maxlength="800" placeholder="e.g. Sort the table: red blocks in tray 1, blue in tray 2, and everything else back in its bin."></textarea>
-      </label>
+      <label class="check"><input type="checkbox" id="direct-run" checked> Run directly: the AI's program runs as soon as it is written and compiled, with no rehearsal or review. (It must still pass the checker, and every move is still checked by the safety policy.)</label>
+      <div class="buttons"><button type="button" id="btn-new-table" class="ghost">Start again with a fresh table</button></div>
+      <textarea id="new-request" class="gone" rows="1" maxlength="800"></textarea>
       <div id="examples" class="examples"></div>
       <p class="muted small" id="start-note">The AI writes a program for your words (a few cents). Before you decide to run it, it is checked, compiled to machine code and rehearsed on a copy of the table.</p>
       <div id="interpretation" class="question" hidden>
@@ -71,28 +78,47 @@
         <label class="check"><input type="checkbox" id="scripted-human"> Answer questions automatically (for demos)</label>
         <label class="check"><input type="checkbox" id="show-all-scenarios"> Show test scenarios too</label>
       </details>
-      <button type="submit" id="start-btn" class="big">Write the program</button>
+      <button type="submit" id="start-btn" class="big gone">Write the program</button>
     </form>
     </div>
   </section>
 
   <!-- A proposed program, before it runs -->
   <section class="card program" id="program-card" hidden></section>
+  <section class="card program" id="revision-card" hidden></section>
 
   <!-- The robot cell, live in 3D -->
   <section class="card cell-card" id="cell-card" hidden>
     <div class="cell-head">
-      <h2>The robot cell <span class="pill">live</span></h2>
+      <h2 class="adv">The robot cell <span class="pill">live</span></h2>
       <div id="speed-buttons" class="speed" hidden></div>
     </div>
-    <p id="cell-hud" class="cell-hud"></p>
-    <div id="cell3d" class="cell3d"></div>
-    <p class="muted small">Drag to turn, pinch or scroll to zoom. A simulated arm with real joint limits and speeds: every move you see is planned and carried out by the simulator, not animated for show. The blue see-through arm replays a rehearsal.</p>
+    <p id="cell-hud" class="cell-hud adv"></p>
+    <div class="stage">
+      <div id="cell3d" class="cell3d"></div>
+      <div id="hud" class="hud">
+        <div id="hud-status" class="hud-status">Tell the robot what to do.</div>
+        <p id="hud-detail" class="hud-detail"></p>
+        <pre id="hud-code" class="hud-code" hidden></pre>
+        <div id="hud-question" class="hud-question" hidden><p id="hud-q"></p><div id="hud-opts" class="buttons"></div></div>
+        <div id="hud-actions" class="buttons"></div>
+      </div>
+    </div>
+    <p class="muted small adv">Drag to turn, pinch or scroll to zoom. A simulated arm with real joint limits and speeds: every move you see is planned and carried out by the simulator, not animated for show. The blue see-through arm replays a rehearsal.</p>
   </section>
 
 
+  <!-- Workspace (2D fallback when 3D graphics are unavailable) -->
+  <section class="card" id="workspace-card" hidden>
+    <h2>Workspace</h2>
+    <svg id="workspace" viewBox="0 0 900 380" role="img" aria-label="Simulated workspace"></svg>
+    <div class="legend small">
+      <span><i class="sw arm"></i>robot arm</span><span><i class="sw red"></i>red block</span><span><i class="sw blue"></i>blue block</span><span><i class="sw green"></i>green block</span><span><i class="sw washer"></i>washer</span><span><i class="sw unknown"></i>unidentified item</span><span><i class="sw hidden"></i>currently hidden from the system</span>
+    </div>
+  </section>
+
   <!-- Now -->
-  <section class="card now" id="now-card" hidden>
+  <section class="card now adv" id="now-card" hidden>
     <div class="now-head">
       <div id="now-badge" class="badge">Nothing running</div>
       <div id="now-progress" class="muted"></div>
@@ -115,10 +141,9 @@
     <p class="fineprint">Pause and Stop control the software only; they are not an emergency stop for real machinery.</p>
   </section>
 
-  <div id="run-panels">
+  <div id="run-panels" class="adv">
   <!-- The program being run -->
   <section class="card program" id="run-program-card" hidden></section>
-  <section class="card program" id="revision-card" hidden></section>
   <div class="two" id="kit-panels">
     <!-- Request -->
     <section class="card">
@@ -150,15 +175,6 @@
     </section>
   </div>
 
-  <!-- Workspace (2D fallback when 3D graphics are unavailable) -->
-  <section class="card" id="workspace-card">
-    <h2>Workspace</h2>
-    <svg id="workspace" viewBox="0 0 900 380" role="img" aria-label="Simulated workspace"></svg>
-    <div class="legend small">
-      <span><i class="sw arm"></i>robot arm</span><span><i class="sw red"></i>red block</span><span><i class="sw blue"></i>blue block</span><span><i class="sw green"></i>green block</span><span><i class="sw washer"></i>washer</span><span><i class="sw unknown"></i>unidentified item</span><span><i class="sw hidden"></i>currently hidden from the system</span>
-    </div>
-  </section>
-
   <!-- Story -->
   <section class="card">
     <h2>What happened</h2>
@@ -168,7 +184,7 @@
 </main>
 
 <!-- Technical view -->
-<main id="tech" class="grid" hidden>
+<main id="tech" class="grid adv" hidden>
   <section class="col">
     <div class="card">
       <h2>Run</h2>

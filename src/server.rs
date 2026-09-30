@@ -671,6 +671,9 @@ fn create_program(ctx: &Ctx, v: &Value) -> Result<Value> {
     let (run_id, dir) =
         harness::create_program_run(&ctx.state_dir, &sc, proposal, &author, "interactive")?;
     set_world_speed(&dir, v)?;
+    if v["session"].as_bool().unwrap_or(false) {
+        RunStore::open(&dir)?.set_flag("session", true)?;
+    }
     Ok(json!({"run_id": run_id}))
 }
 
@@ -909,7 +912,10 @@ fn program_write(ctx: &Ctx, body: &str, progress: &dyn Fn(Value)) -> Result<Valu
     let Some((w, compiled)) = last else {
         crate::bail!("the AI did not answer");
     };
+    // "Run directly" skips the rehearsal (the program is still checked and compiled).
+    let rehearse = v["rehearse"].as_bool().unwrap_or(true);
     let rehearsal = match &compiled {
+        Some(_) if !rehearse => None,
         Some(_) => {
             progress(
                 json!({"phase": "rehearsing", "program": w.source, "explanation": w.explanation}),

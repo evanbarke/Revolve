@@ -180,6 +180,8 @@ class Cell {
     this.hud = null;
     const ro = new ResizeObserver(() => this.resize());
     ro.observe(el);
+    window.addEventListener("resize", () => this.resize());
+    new MutationObserver(() => this.resize()).observe(document.body, { attributes: true, attributeFilter: ["class"] });
     this.resize();
     const loop = () => { this.frame(); requestAnimationFrame(loop); };
     requestAnimationFrame(loop);
@@ -187,7 +189,9 @@ class Cell {
 
   resize() {
     const w = this.el.clientWidth || 600;
-    const h = Math.max(260, Math.round(w * 0.62));
+    // In the simple view the cell fills most of the screen.
+    const simple = document.body.classList.contains("simple-ui");
+    const h = simple ? Math.max(320, Math.min(window.innerHeight - 150, Math.round(w * 0.85))) : Math.max(260, Math.round(w * 0.62));
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();

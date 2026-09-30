@@ -265,3 +265,53 @@ fn a_destination_computed_at_run_time_is_still_held_to_the_policy() {
     // The part it picked up is still in the arm or back where it was: never outside.
     assert!(where_is(&dir).values().all(|l| l != "outside"));
 }
+
+#[test]
+fn a_session_keeps_the_table_between_requests() {
+    let state = temp_state("prog-session");
+    let first = "for p in parts(kind=\"red_block\", at=\"table\"):\n    move(p, \"tray-1\")\nexpect count(\"tray-1\", kind=\"red_block\") == 3, \"the red blocks are in tray 1\"\n";
+    let (run, dir) = start(&state, "messy-table", first);
+    RunStore::open(&dir)
+        .unwrap()
+        .set_flag("session", true)
+        .unwrap();
+    supervise(&state, &run);
+    let st = RunStore::open(&dir).unwrap().state().unwrap();
+    assert_eq!(
+        st.status, R_AWAITING_PLANNER,
+        "the run waits for the next request"
+    );
+    assert_eq!(where_is(&dir)["red-01"], "tray-1");
+    // The next request acts on the same table: the red blocks are already moved.
+    let second = "for p in parts(at=\"tray-1\"):\n    move(p, \"tray-2\")\nexpect count(\"tray-1\") == 0, \"tray 1 is empty\"\n";
+    RunStore::open(&dir)
+        .unwrap()
+        .submit_program(
+            &json!({"language": revolve::script::LANGUAGE, "source": second}),
+            "test",
+            "next request",
+            true,
+        )
+        .unwrap();
+    supervise(&state, &run);
+    let store = RunStore::open(&dir).unwrap();
+    assert_eq!(store.state().unwrap().status, R_AWAITING_PLANNER);
+    let at = where_is(&dir);
+    assert!(
+        ["red-01", "red-02", "red-03"]
+            .iter()
+            .all(|r| at[*r] == "tray-2"),
+        "{at:?}"
+    );
+    let done: Vec<_> = store
+        .events(0, 10_000)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "program_finished")
+        .collect();
+    assert_eq!(done.len(), 2);
+    assert!(
+        done.iter()
+            .all(|e| e.data.as_ref().unwrap()["all_expectations_held"] == true)
+    );
+}

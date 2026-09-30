@@ -207,3 +207,28 @@ ul.checks .detail { display: block; color: var(--muted); font-size: 12px; }
 #workspace .arm-claw { stroke: var(--arm); stroke-width: 4; fill: none; stroke-linecap: round; }
 #workspace .slot.active { stroke: var(--warn); stroke-width: 3; }
 #workspace .table-top { fill: var(--slot); stroke: var(--line); stroke-dasharray: 6 4; }
+
+/* ---- simple view: the request and the 3D cell; the rest behind Advanced ---- */
+.gone { display: none !important; }
+body.simple-ui .adv { display: none !important; }
+body.simple-ui .top .sub { display: none; }
+.cmdbar { display: flex; gap: 10px; align-items: stretch; }
+.cmdbar textarea { flex: 1; font-size: 17px; min-height: 52px; padding: 12px; border-radius: 12px; }
+.cmdbar button { min-width: 110px; border-radius: 12px; }
+body.simple-ui .cell-card { padding: 8px; }
+body.simple-ui .cell-head { position: absolute; right: 18px; top: 16px; z-index: 3; }
+.cell-card { position: relative; }
+.stage { position: relative; }
+.hud { position: absolute; left: 12px; top: 12px; max-width: min(560px, calc(100% - 24px)); background: rgba(12, 15, 20, 0.8); color: #eef2f7; border-radius: 12px; padding: 10px 14px; z-index: 2; box-shadow: 0 4px 18px rgba(0,0,0,0.25); }
+.hud-status { font-weight: 700; font-size: 16px; }
+.hud-detail { margin: 4px 0 0; font-size: 13px; color: #c7d0db; white-space: pre-line; }
+.hud-detail:empty { display: none; }
+.hud-code { margin: 8px 0 0; padding: 8px 10px; background: rgba(0,0,0,0.35); border-radius: 8px; color: #dbe6f3; font: 12.5px/1.45 ui-monospace, "Cascadia Code", Consolas, monospace; font-variant-ligatures: none; white-space: pre; overflow: auto; max-height: 38vh; }
+.hud-question p { margin: 8px 0 4px; font-weight: 600; }
+.hud .buttons { margin-top: 8px; }
+.hud button { font-size: 14px; padding: 6px 12px; }
+.hud button.ghost { color: #cfe0ff; border-color: #8fb0ff; }
+.hud:empty { display: none; }
+.speed { background: rgba(12, 15, 20, 0.55); color: #dbe3ee; border-radius: 10px; padding: 4px 6px; }
+.speed button.ghost { color: #cfe0ff; border-color: #8fb0ff; }
+@media (max-width: 600px) { .cmdbar { flex-direction: column; } .hud { position: static; max-width: none; margin-top: 8px; } }
