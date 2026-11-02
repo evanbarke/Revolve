@@ -2,9 +2,9 @@
 name = "revolve"
 version = "0.1.0"
 edition = "2024"
-# MSRV: tested on 1.94.1 (Windows x86_64 dev host) and 1.95.0 (Jetson aarch64).
-# The floor feature is std::fs::File::try_lock (stable since 1.89).
-rust-version = "1.94"
+# MSRV: tested on 1.95.0 (Jetson aarch64). The floor is wasmtime 48 (Rust 1.95);
+# the Windows dev host needs `rustup update` from 1.94.1.
+rust-version = "1.95"
 description = "Revolve: an explicit-intent execution runtime prototype (Action IR, compiler, recoverable executor, simulator)."
 license = "UNLICENSED"
 publish = false
@@ -20,9 +20,9 @@ ureq = "3.4.2"
 # OS randomness for the LAN access key (already in the dependency tree).
 getrandom = "0.2.17"
 # Plan programs: generated as WebAssembly, compiled to native code by Cranelift.
-# wasmtime 47 is the newest release whose MSRV (1.94) matches this crate's.
+# wasmtime 48.0.7 fixes GHSA-mghf-wjfp-p5xm (aarch64 br_table miscompile, the Jetson's target).
 wasm-encoder = "0.259.0"
-wasmtime = { version = "47.0.4", default-features = false, features = ["cranelift", "runtime", "std"] }
+wasmtime = { version = "48.0.8", default-features = false, features = ["cranelift", "runtime", "std"] }
 # Rigid-body physics for the robot cell: gravity, contacts, solid walls. Bit-for-bit
 # deterministic across x86_64 and aarch64 (enhanced-determinism), so a command
 # gives the same result on Windows and the Jetson, and on replay.
